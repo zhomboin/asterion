@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { errorMessage, isUnauthorized, request } from '../api';
-import { DataTable, Problem, Timestamp } from '../ui';
+import { DataTable, PageHeader, Problem, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { operationName, operationStates, operationTarget, type OperationDetail } from './data';
 
@@ -36,15 +36,16 @@ export function OperationDetailPage({ id, onExpired }: { id: string; onExpired: 
 
   return (
     <>
-      <a href="/operations" className="text-link back-link">运维任务</a>
+      {!job && <PageHeader back={{ href: '/operations', label: '运维任务' }} title="任务详情" />}
       {resource.error && <Problem error={resource.error} retry={resource.refresh} />}
       {resource.loading && <p role="status">正在读取任务…</p>}
       {job && (
         <>
-          <div className="page-heading">
-            <h1>{operationName(job.action)}</h1>
-            <span className="operation-state" data-state={job.state}>{operationStates[job.state] ?? job.state}</span>
-          </div>
+          <PageHeader
+            back={{ href: '/operations', label: '运维任务' }}
+            title={operationName(job.action)}
+            actions={<span className="operation-state" data-state={job.state}>{operationStates[job.state] ?? job.state}</span>}
+          />
           <dl className="detail-facts asset-facts">
             <div><dt>节点</dt><dd><a href={'/nodes/' + encodeURIComponent(job.node_id)} className="text-link">{job.node_name}</a></dd></div>
             <div><dt>目标</dt><dd className="technical">{operationTarget(job.action)}</dd></div>

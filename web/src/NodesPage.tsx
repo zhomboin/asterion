@@ -1,12 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import type { Node, NodePage } from './api';
 import { NodeDialog } from './NodeDialog';
-import { NodeStatus, Pagination, Problem, Timestamp, nodeStatusLabel, nodeStatuses } from './ui';
+import { Card, CallToAction, Meter, NodeStatus, PageHeader, Pagination, Problem, Timestamp, nodeStatusLabel, nodeStatuses } from './ui';
 import { useResource } from './useResource';
 import { OverviewAlerts } from './alerts/OverviewAlerts';
 
 const pageSize = 50;
 type Dialog = { node?: Node };
+const percent = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
 
 export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: () => void }) {
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -18,6 +19,7 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
   const nodes = page?.nodes ?? [];
   const counts = { pending: 0, online: 0, offline: 0 };
   for (const node of nodes) counts[node.status]++;
+  const partial = Boolean(offset || page?.has_more);
 
   function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -31,12 +33,27 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
     setOffset(0);
   }
 
+  const list = (
+    <>
+      {page && !nodes.length && <p className="empty">{Object.keys(filters).length ? '没有匹配的节点' : '暂无节点'}</p>}
+      {page && nodes.length > 0 && (
+        <ul className="node-list" aria-label="节点列表">
+          {nodes.map((node) => (
+            <NodeRow key={node.id} node={node} manage={manage} onManage={() => setDialog({ node })} />
+          ))}
+        </ul>
+      )}
+      <Pagination label="节点分页" offset={offset} pageSize={pageSize} hasMore={page?.has_more} onChange={setOffset} />
+    </>
+  );
+
   return (
     <>
-      <div className="page-heading">
-        <h1>{manage ? '节点' : '总览'}</h1>
-        <button className="primary" type="button" onClick={() => setDialog({})}>登记节点</button>
-      </div>
+      <PageHeader
+        title={manage ? '节点' : '总览'}
+        scope={manage ? '登记、筛选与管理受监控节点' : '节点健康、进行中告警与最近心跳'}
+        actions={<CallToAction icon="plus" onClick={() => setDialog({})}>登记节点</CallToAction>}
+      />
       {manage && (
         <form className="filter-bar" onSubmit={search}>
           <label>搜索<input type="search" name="q" placeholder="名称或 ID" maxLength={100} /></label>
@@ -49,27 +66,16 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
         </form>
       )}
       {snapshot.error && <Problem error={page ? '节点状态未更新。' : snapshot.error} retry={snapshot.refresh} />}
-      {snapshot.loading && <p role="status">正在加载节点…</p>}
-      {page && !manage && (
-        <dl className="summary" aria-label={offset || page.has_more ? '本页节点状态' : '节点状态'}>
-          {nodeStatuses.map((status) => (
-            <div key={status} data-status={status}>
-              <dt>{nodeStatusLabel[status]}</dt>
-              <dd>{counts[status]}</dd>
-            </div>
-          ))}
-        </dl>
+      {snapshot.loading && <p role="status" className="muted">正在加载节点…</p>}
+      {manage ? list : (
+        <div className="overview-grid">
+          {page && <HealthCard counts={counts} total={nodes.length} partial={partial} />}
+          <OverviewAlerts onExpired={onExpired} />
+          <Card className="overview-nodes" title="节点" actions={<a className="text-link" href="/nodes">管理节点</a>}>
+            {list}
+          </Card>
+        </div>
       )}
-      {!manage && <OverviewAlerts onExpired={onExpired} />}
-      {page && !nodes.length && <p className="empty">{Object.keys(filters).length ? '没有匹配的节点' : '暂无节点'}</p>}
-      {page && nodes.length > 0 && (
-        <ul className="node-list" aria-label="节点列表">
-          {nodes.map((node) => (
-            <NodeRow key={node.id} node={node} manage={manage} onManage={() => setDialog({ node })} />
-          ))}
-        </ul>
-      )}
-      <Pagination label="节点分页" offset={offset} pageSize={pageSize} hasMore={page?.has_more} onChange={setOffset} />
       {dialog && (
         <NodeDialog
           node={dialog.node}
@@ -79,6 +85,27 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
         />
       )}
     </>
+  );
+}
+
+function HealthCard({ counts, total, partial }: { counts: Record<Node['status'], number>; total: number; partial: boolean }) {
+  const ratio = (count: number) => (total ? (count / total) * 100 : 0);
+  return (
+    <Card className="health-card" title={partial ? '本页节点健康' : '节点健康'}>
+      <p className="figure">{percent.format(ratio(counts.online))}<small>%</small></p>
+      <p className="muted">在线率 · 共 {total} 个节点</p>
+      <dl className="legend" aria-label={partial ? '本页节点状态' : '节点状态'}>
+        {nodeStatuses.map((status) => (
+          <div key={status} data-status={status}>
+            <dt><span className="dot" aria-hidden="true" />{nodeStatusLabel[status]}</dt>
+            <dd>
+              <Meter value={ratio(counts[status])} label={nodeStatusLabel[status] + '占比'} />
+              <span className="legend-value">{counts[status]}</span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </Card>
   );
 }
 

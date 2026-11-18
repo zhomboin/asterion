@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { bytes, DataTable, fraction, Problem, Timestamp } from '../ui';
+import { bytes, DataTable, fraction, Problem, Tabs, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import type { Container, ContainerLogs, ContainerStats } from './data';
 import { ServiceActions } from '../operations/ServiceActions';
@@ -24,11 +24,7 @@ export function ContainerDetail({ base, item, engineId, onClose, onExpired, oper
         <div><h2>{item.name}</h2><p className="technical page-scope">{item.id}</p></div>
         <button type="button" className="quiet" onClick={onClose}>关闭</button>
       </div>
-      <nav className="tabs sub-tabs" aria-label="容器详情视图">
-        {views.map(([key, label]) => (
-          <button key={key} type="button" aria-pressed={key === view} onClick={() => setView(key)}>{label}</button>
-        ))}
-      </nav>
+      <Tabs label="容器详情视图" size="sm" items={views} value={view} onChange={setView} />
       {view === 'info' && <Metadata item={item} />}
       {view === 'info' && engineId && operations?.catalog.docker_targets.some((target) => target.engine_id === engineId && target.container_ids.includes(item.id)) && (
         <ServiceActions title="容器运维" onChoose={(verb) => {

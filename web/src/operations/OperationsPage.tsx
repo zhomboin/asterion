@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { NodePage } from '../api';
-import { DataTable, Pagination, Problem, Timestamp } from '../ui';
+import { DataTable, PageHeader, Pagination, Problem, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { operationName, operationStates, operationTarget, type OperationList } from './data';
 
@@ -23,7 +23,7 @@ export function OperationsPage({ onExpired }: { onExpired: () => void }) {
 
   return (
     <>
-      <div className="page-heading"><h1>运维任务</h1></div>
+      <PageHeader title="运维任务" scope="受控操作的确认、执行与审计记录" />
       <form className="filter-bar operation-filters" onSubmit={search}>
         <label>节点<select name="node_id" defaultValue={initialNode}>
           <option value="">全部节点</option>

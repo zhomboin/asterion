@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { NodePage } from '../api';
-import { DataTable, Pagination, Problem, Timestamp } from '../ui';
+import { CallToAction, DataTable, PageHeader, Pagination, Problem, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { AssetForm } from './AssetForm';
 import { managementLabels, managementOptions, type AssetResults } from './data';
@@ -30,10 +30,11 @@ export function AssetListPage({ onExpired }: { onExpired: () => void }) {
 
   return (
     <>
-      <div className="page-heading">
-        <h1>服务资产</h1>
-        <button type="button" className="primary" onClick={() => setCreating(true)} disabled={creating}>登记资产</button>
-      </div>
+      <PageHeader
+        title="服务资产"
+        scope="人工登记的服务及其运行实例"
+        actions={<CallToAction icon="plus" onClick={() => setCreating(true)} disabled={creating}>登记资产</CallToAction>}
+      />
       {creating && (
         <AssetForm
           onExpired={onExpired}

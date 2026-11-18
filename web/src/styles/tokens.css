@@ -1,0 +1,99 @@
+/*
+ * Asterion 设计令牌（Design Tokens）
+ * 风格：单色柔光玻璃（Monochrome Soft Glass）。规范见 docs/design-system.md。
+ * 组件与页面只允许引用这里的变量，不直接写颜色、圆角、阴影的字面值。
+ */
+:root {
+  color-scheme: light;
+
+  /* 字体 */
+  --font-sans: 'Inter', 'SF Pro Text', -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
+
+  /* 灰阶 */
+  --gray-0: #ffffff;
+  --gray-50: #f7f7f8;
+  --gray-100: #f0f0f1;
+  --gray-150: #e8e8ea;
+  --gray-200: #dddde0;
+  --gray-300: #c6c6ca;
+  --gray-400: #a3a3a8;
+  --gray-500: #85858b;
+  --gray-600: #636368;
+  --gray-700: #434347;
+  --gray-800: #262628;
+  --gray-900: #161617;
+  --gray-950: #0e0e0f;
+
+  /* 语义色：表面 */
+  --canvas: #e4e4e6;
+  --frame: rgb(255 255 255 / .46);
+  --frame-border: rgb(255 255 255 / .75);
+  --surface: rgb(255 255 255 / .82);
+  --surface-solid: var(--gray-0);
+  --surface-sunken: rgb(20 20 22 / .04);
+  --surface-hover: rgb(20 20 22 / .06);
+  --inverse: var(--gray-900);
+  --inverse-raised: var(--gray-800);
+
+  /* 语义色：文字与线条 */
+  --ink: var(--gray-900);
+  --ink-2: var(--gray-700);
+  --muted: var(--gray-600);
+  --on-inverse: #f4f4f5;
+  --on-inverse-muted: #9b9ba1;
+  --line: rgb(20 20 22 / .08);
+  --line-strong: rgb(20 20 22 / .16);
+  --line-inverse: rgb(255 255 255 / .1);
+  --accent: var(--inverse);
+
+  /* 语义色：状态（仅用于圆点、状态胶囊、图表，不做大面积底色） */
+  --online: #2f8a5f;
+  --offline: #c4473c;
+  --pending: #b0851f;
+
+  /* 圆角 */
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-pill: 999px;
+
+  /* 阴影 */
+  --shadow-xs: 0 1px 2px rgb(15 15 16 / .05);
+  --shadow-sm: 0 1px 2px rgb(15 15 16 / .04), 0 6px 16px -8px rgb(15 15 16 / .12);
+  --shadow-md: 0 1px 2px rgb(15 15 16 / .04), 0 18px 40px -18px rgb(15 15 16 / .22);
+  --shadow-lg: 0 30px 80px -30px rgb(15 15 16 / .35);
+  --shadow-inset: inset 0 1px 0 rgb(255 255 255 / .7);
+
+  /* 间距（4px 基线） */
+  --space-1: .25rem;
+  --space-2: .5rem;
+  --space-3: .75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* 字号 */
+  --text-xs: .75rem;
+  --text-sm: .8125rem;
+  --text-md: .9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-display: clamp(2rem, 4.2vw, 3.25rem);
+  --text-figure: clamp(2rem, 3.6vw, 2.75rem);
+
+  /* 控件尺寸 */
+  --control-sm: 2rem;
+  --control-md: 2.5rem;
+  --control-lg: 3rem;
+
+  /* 动效 */
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --duration: 160ms;
+
+  /* 毛玻璃 */
+  --blur: blur(22px) saturate(1.15);
+}

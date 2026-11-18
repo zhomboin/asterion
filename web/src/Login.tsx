@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { errorMessage, request, type Session } from './api';
+import { Brand, CallToAction } from './ui';
 
 export function Login({ onSignIn }: { onSignIn: (session: Session) => void }) {
   const [busy, setBusy] = useState(false);
@@ -28,20 +29,26 @@ export function Login({ onSignIn }: { onSignIn: (session: Session) => void }) {
   }
 
   return (
-    <main className="shell login">
-      <h1>登录</h1>
-      <form className="fields" method="post" onSubmit={submit}>
-        <label>
-          用户名
-          <input name="username" autoComplete="username" required maxLength={64} />
-        </label>
-        <label>
-          密码
-          <input name="password" type="password" autoComplete="current-password" required />
-        </label>
-        {error && <p className="error" role="alert">{error}</p>}
-        <button className="primary" type="submit" disabled={busy}>{busy ? '正在登录…' : '登录'}</button>
-      </form>
+    <main className="stage">
+      <div className="stage-card login">
+        <Brand />
+        <div className="page-title">
+          <h1>登录</h1>
+          <p className="page-scope">自托管监控与运维中心</p>
+        </div>
+        <form className="fields" method="post" onSubmit={submit}>
+          <label>
+            用户名
+            <input name="username" autoComplete="username" required maxLength={64} />
+          </label>
+          <label>
+            密码
+            <input name="password" type="password" autoComplete="current-password" required />
+          </label>
+          {error && <p className="error" role="alert">{error}</p>}
+          <CallToAction type="submit" disabled={busy}>{busy ? '正在登录…' : '登录'}</CallToAction>
+        </form>
+      </div>
     </main>
   );
 }

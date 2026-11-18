@@ -1,22 +1,20 @@
 import { useState, type FormEvent } from 'react';
 import type { NodePage } from '../api';
-import { DataTable, fraction, Pagination, Problem, Timestamp } from '../ui';
+import { DataTable, fraction, PageHeader, Pagination, Problem, Tabs, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { AlertRulesPanel } from './AlertRulesPanel';
 import { alertMetric, type Alerts } from './data';
 
 const pageSize = 50;
+const views = [['events', '事件'], ['rules', '规则']] as const;
 
 export function AlertsPage({ onExpired }: { onExpired: () => void }) {
   const [view, setView] = useState<'events' | 'rules'>('events');
   const nodes = useResource<NodePage>('/nodes?limit=100', onExpired);
   return (
     <>
-      <div className="page-heading"><h1>告警</h1></div>
-      <nav className="tabs" aria-label="告警视图">
-        <button type="button" aria-pressed={view === 'events'} onClick={() => setView('events')}>事件</button>
-        <button type="button" aria-pressed={view === 'rules'} onClick={() => setView('rules')}>规则</button>
-      </nav>
+      <PageHeader title="告警" scope="告警事件与阈值规则" />
+      <Tabs label="告警视图" items={views} value={view} onChange={setView} />
       {nodes.error && <Problem error={nodes.error} retry={nodes.refresh} />}
       {view === 'events' && <AlertEvents nodes={nodes.data?.nodes ?? []} onExpired={onExpired} />}
       {view === 'rules' && <AlertRulesPanel nodes={nodes.data?.nodes ?? []} onExpired={onExpired} />}
