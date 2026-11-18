@@ -43,6 +43,7 @@ export default defineConfig(({ command, isPreview }) => {
       },
       proxy: {
         '/healthz': proxy,
+        '/api/v1/agent/connect': { ...proxy, ws: true },
         '/api/v1': proxy,
       },
     },

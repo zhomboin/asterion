@@ -70,8 +70,15 @@ pub(super) async fn docker(
     State(pool): State<SqlitePool>,
     Extension(bus): Extension<Arc<AgentBus>>,
     Path(id): Path<String>,
+    options: Result<Query<UnitQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
-    run_query(&pool, &bus, &id, "docker", json!({})).await
+    let Query(options) = options.map_err(|_| ApiError::INVALID)?;
+    let args = match options.q {
+        Some(q) if q.len() <= 256 && !q.chars().any(char::is_control) => json!({"q": q.trim()}),
+        Some(_) => return Err(ApiError::INVALID),
+        None => json!({}),
+    };
+    run_query(&pool, &bus, &id, "docker", args).await
 }
 
 pub(super) async fn docker_stats(
@@ -166,7 +173,7 @@ async fn run_query(
     Ok(Json(result))
 }
 
-fn is_container_id(id: &str) -> bool {
+pub(super) fn is_container_id(id: &str) -> bool {
     id.len() == 64
         && id
             .bytes()

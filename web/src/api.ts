@@ -7,6 +7,14 @@ export interface NodeDraft {
   kind: 'linux' | 'wsl';
   tags: string[];
   notes: string;
+  host_name?: string | null;
+}
+
+export interface NodeMetrics {
+  observed_at: number;
+  cpu_percent: number | null;
+  memory_percent: number | null;
+  disk_percent: number | null;
 }
 
 export interface Node extends NodeDraft {
@@ -17,11 +25,15 @@ export interface Node extends NodeDraft {
   agent_version: string | null;
   last_seen_at: number | null;
   status: 'pending' | 'online' | 'offline';
+  metrics?: NodeMetrics;
 }
+
+export type NodeStatusCounts = Record<Node['status'], number>;
 
 export interface NodePage {
   nodes: Node[];
   has_more: boolean;
+  status_counts?: NodeStatusCounts;
 }
 
 export interface Enrollment {
@@ -41,7 +53,7 @@ export class ApiError extends Error {
 }
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
   keepalive?: boolean;

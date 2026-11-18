@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use asterion_server::{
-    agent_bus::AgentBus, alerts, app, auth, config::Config, database, monitor, operations, trends,
+    agent_bus::AgentBus, alerts, app, auth, config::Config, database, monitor, operations,
+    service_monitors, trends,
 };
 use axum_server::Handle;
 use axum_server::tls_rustls::{RustlsConfig, from_tcp_rustls};
@@ -46,21 +47,21 @@ async fn main() -> Result<()> {
     trends::purge(&pool, config.trend_retention_seconds)
         .await
         .context("无法清理过期趋势")?;
-    let maintenance = maintain(pool.clone(), &config);
-    let (stopping, shutdown) = watch::channel(false);
-    let app = app::router(
-        pool.clone(),
-        config.web_dir.as_deref(),
-        shutdown,
-        Arc::new(
-            AgentBus::new(config.sample_interval_secs)
-                .with_terminal_enabled(config.terminal_enabled)
-                .with_retention_days(
-                    (config.retention_seconds / 86_400) as u64,
-                    (config.trend_retention_seconds / 86_400) as u64,
-                ),
-        ),
+    service_monitors::purge(&pool, config.trend_retention_seconds)
+        .await
+        .context("无法清理过期服务监控记录")?;
+    let bus = Arc::new(
+        AgentBus::new(config.sample_interval_secs)
+            .with_terminal_enabled(config.terminal_enabled)
+            .with_retention_days(
+                (config.retention_seconds / 86_400) as u64,
+                (config.trend_retention_seconds / 86_400) as u64,
+            ),
     );
+    let maintenance = maintain(pool.clone(), &config);
+    let service_checks = monitor_services(pool.clone(), Arc::clone(&bus));
+    let (stopping, shutdown) = watch::channel(false);
+    let app = app::router(pool.clone(), config.web_dir.as_deref(), shutdown, bus);
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
     let signal = tokio::spawn(async move {
@@ -77,6 +78,9 @@ async fn main() -> Result<()> {
         .context("中心服务运行失败");
     signal.abort();
     maintenance.abort();
+    service_checks.abort();
+    let _ = maintenance.await;
+    let _ = service_checks.await;
     pool.close().await;
     drop(database_guard);
     result
@@ -132,12 +136,28 @@ fn maintain(pool: sqlx::SqlitePool, config: &Config) -> tokio::task::JoinHandle<
                     if let Err(error) = trends::purge(&pool, trend_retention).await {
                         tracing::warn!(%error, "清理过期趋势失败");
                     }
+                    if let Err(error) = service_monitors::purge(&pool, trend_retention).await {
+                        tracing::warn!(%error, "清理过期服务监控记录失败");
+                    }
                 }
                 _ = alert_tick.tick() => {
                     if let Err(error) = alerts::evaluate(&pool, sample_interval).await {
                         tracing::warn!(%error, "评估告警失败");
                     }
                 }
+            }
+        }
+    })
+}
+
+fn monitor_services(pool: sqlx::SqlitePool, bus: Arc<AgentBus>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            if let Err(error) = service_monitors::poll_due(&pool, &bus).await {
+                tracing::warn!(%error, "服务监控检查失败");
             }
         }
     })

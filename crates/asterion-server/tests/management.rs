@@ -283,24 +283,23 @@ async fn operation_confirmation_is_single_use_and_bound_to_the_panel_session() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(error["code"], "step_up_required");
-    let (status, _) = call(
-        &router,
-        &cookie,
-        "POST",
-        &format!("/api/v1/operations/{task_id}/cancel"),
-        Value::Null,
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    let (_, cancelled) = call(
-        &router,
-        &cookie,
-        "GET",
-        &format!("/api/v1/operations/{task_id}"),
-        Value::Null,
-    )
-    .await;
+    let task_path = format!("/api/v1/operations/{task_id}");
+    let cancel_path = format!("{task_path}/cancel");
+    let (status, other_detail) = call(&router, &other_cookie, "GET", &task_path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(other_detail["can_cancel"], false);
+    let denied = call(&router, &other_cookie, "POST", &cancel_path, Value::Null).await;
+    assert_eq!(denied.0, StatusCode::NOT_FOUND);
+
+    let (_, owner_detail) = call(&router, &cookie, "GET", &task_path, Value::Null).await;
+    assert_eq!(owner_detail["state"], "prepared");
+    assert_eq!(owner_detail["can_cancel"], true);
+    let allowed = call(&router, &cookie, "POST", &cancel_path, Value::Null).await;
+    assert_eq!(allowed.0, StatusCode::ACCEPTED);
+    let (_, cancelled) = call(&router, &cookie, "GET", &task_path, Value::Null).await;
     assert_eq!(cancelled["state"], "cancelled");
+    assert_eq!(cancelled["can_cancel"], false);
+    assert_eq!(cancelled["audit"][1]["action"], "cancelled");
 
     operations::recover(&pool).await.unwrap();
     let count: i64 =
@@ -399,4 +398,91 @@ async fn threshold_alerts_recover_and_rollups_survive_raw_retention() {
         .sum();
     assert_eq!(count, 2);
     assert_eq!(cpu / count as f64, 50.0);
+}
+
+#[tokio::test]
+async fn service_and_metric_alerts_share_filters_and_pagination() {
+    let (pool, router, cookie, node) = fixture().await;
+    let other = new_id();
+    let active = new_id();
+    let resolved = new_id();
+    let metric = new_id();
+    let foreign = new_id();
+    sqlx::query(
+        "INSERT INTO alert_events
+         (id, rule_id, node_id, node_name, metric, threshold, value, opened_at, updated_at)
+         VALUES (?, ?, ?, '测试节点', 'cpu', 90.0, 95.0, 20, 20)",
+    )
+    .bind(&metric)
+    .bind(new_id())
+    .bind(&node)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (id, node_id, opened_at, resolution) in [
+        (active.as_str(), node.as_str(), 30, None),
+        (resolved.as_str(), node.as_str(), 10, Some("disabled")),
+        (foreign.as_str(), other.as_str(), 40, Some("recovered")),
+    ] {
+        sqlx::query(
+            "INSERT INTO service_alert_events
+             (id, monitor_id, node_id, node_name, unit, opened_at, updated_at, resolved_at, resolution)
+             VALUES (?, ?, ?, '服务节点', 'example.service', ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(new_id())
+        .bind(node_id)
+        .bind(opened_at)
+        .bind(opened_at + 5)
+        .bind(resolution.map(|_| opened_at + 5))
+        .bind(resolution)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let filtered = format!("/api/v1/alerts?node_id={node}");
+    let (status, events) = call(
+        &router,
+        &cookie,
+        "GET",
+        &format!("{filtered}&state=all&limit=1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(events["has_more"], true);
+    assert_eq!(events["alerts"][0]["id"], active);
+    assert_eq!(events["alerts"][0]["metric"], "service");
+    assert_eq!(events["alerts"][0]["unit"], "example.service");
+    assert_eq!(events["alerts"][0]["status"], "active");
+    assert!(events["alerts"][0]["threshold"].is_null());
+
+    let (status, events) = call(
+        &router,
+        &cookie,
+        "GET",
+        &format!("{filtered}&state=active&limit=1&offset=1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(events["has_more"], false);
+    assert_eq!(events["alerts"][0]["id"], metric);
+    assert_eq!(events["alerts"][0]["metric"], "cpu");
+    assert_eq!(events["alerts"][0]["threshold"], 90.0);
+    assert!(events["alerts"][0]["unit"].is_null());
+
+    let (status, events) = call(
+        &router,
+        &cookie,
+        "GET",
+        &format!("{filtered}&state=resolved"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(events["alerts"].as_array().unwrap().len(), 1);
+    assert_eq!(events["alerts"][0]["id"], resolved);
+    assert_eq!(events["alerts"][0]["resolution"], "disabled");
 }

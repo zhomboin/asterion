@@ -52,6 +52,7 @@ export type ProcessDetail = Process & {
   executable: string | null;
   parent_pid: number | null;
   user: string | null;
+  runtime?: { kind: 'systemd'; unit: string } | { kind: 'docker'; container_id: string } | null;
 };
 
 export type Container = {

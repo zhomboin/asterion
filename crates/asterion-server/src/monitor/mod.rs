@@ -1,4 +1,5 @@
 mod error;
+mod managed;
 mod metrics;
 mod queries;
 
@@ -13,6 +14,7 @@ pub(crate) use queries::bus_error;
 
 pub fn routes() -> Router<SqlitePool> {
     Router::new()
+        .merge(managed::routes())
         .route("/api/v1/nodes/{id}/metrics", get(metrics::history))
         .route("/api/v1/nodes/{id}/processes", get(queries::processes))
         .route("/api/v1/nodes/{id}/processes/{pid}", get(queries::process))

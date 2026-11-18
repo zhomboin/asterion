@@ -4,7 +4,7 @@ import { DataTable, PageHeader, Pagination, Problem, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { operationName, operationStates, operationTarget, type OperationList } from './data';
 
-const pageSize = 50;
+const pageSize = 12;
 
 export function OperationsPage({ onExpired }: { onExpired: () => void }) {
   const initialNode = new URLSearchParams(window.location.search).get('node_id') || '';

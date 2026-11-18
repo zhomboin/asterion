@@ -27,7 +27,9 @@ export type Alert = {
   rule_id: string;
   node_id: string;
   node_name: string;
-  metric: AlertMetric;
+  metric: AlertMetric | 'service';
+  unit?: string | null;
+  resolution?: 'disabled' | 'recovered' | null;
   status: 'active' | 'resolved';
   value: number | null;
   threshold: number | null;
@@ -35,6 +37,16 @@ export type Alert = {
   updated_at: number;
   resolved_at: number | null;
 };
+
+export function alertLabel(alert: Alert) {
+  return alert.metric === 'service' ? '服务停机' : alertMetric[alert.metric];
+}
+
+export function alertNodeHref(alert: Alert) {
+  const node = '/nodes/' + encodeURIComponent(alert.node_id);
+  if (alert.metric !== 'service' || !alert.unit) return node;
+  return node + '?' + new URLSearchParams({ service: alert.unit });
+}
 
 export type Alerts = { alerts: Alert[]; has_more: boolean };
 export type Rules = { rules: AlertRule[]; has_more: boolean };

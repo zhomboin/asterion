@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{CollectorError, MAX_QUERY_BYTES, observed_at, redact, truncate_utf8};
 
-use super::{Request, transport};
+use super::{InventoryFilter, Request, transport};
 
 const MAX_CONTAINERS: usize = 96;
 const MAX_LIST_BYTES: usize = 4 * 1024 * 1024;
@@ -20,7 +20,7 @@ pub(super) fn query(
     request: Request,
     deadline: Instant,
 ) -> Result<Value, CollectorError> {
-    let inventory = matches!(request, Request::Docker);
+    let inventory = matches!(request, Request::Docker | Request::DockerFiltered(_));
     if let Some(status) = endpoint_state(socket) {
         return if inventory {
             Ok(inventory_status(status))
@@ -34,7 +34,11 @@ pub(super) fn query(
     }
     let engine = Engine { socket, deadline };
     if inventory {
-        return match engine.inventory() {
+        let filter = match &request {
+            Request::DockerFiltered(filter) => Some(filter),
+            _ => None,
+        };
+        return match engine.inventory(filter) {
             Err(CollectorError {
                 code: "unavailable" | "timeout",
                 ..
@@ -47,7 +51,7 @@ pub(super) fn query(
         };
     }
     match request {
-        Request::Docker => unreachable!(),
+        Request::Docker | Request::DockerFiltered(_) => unreachable!(),
         Request::DockerStats(container) => engine.stats(&container.id),
         Request::DockerLogs(logs) => engine.logs(&logs.id, logs.lines.unwrap_or(100)),
     }
@@ -65,15 +69,32 @@ impl Engine<'_> {
         serde_json::from_slice(&result.content).map_err(|_| CollectorError::FAILED)
     }
 
-    fn inventory(&self) -> Result<Value, CollectorError> {
+    fn inventory(&self, filter: Option<&InventoryFilter>) -> Result<Value, CollectorError> {
         let version = self.get_json("/version", 64 * 1024)?;
         let info = self.get_json("/info", MAX_DETAIL_BYTES)?;
         let list = self.get_json("/containers/json?all=1", MAX_LIST_BYTES)?;
         let list = list.as_array().ok_or(CollectorError::FAILED)?;
         let mut containers = Vec::new();
         let mut total = 0;
-        let mut truncated = list.len() > MAX_CONTAINERS;
-        for listed in list.iter().take(MAX_CONTAINERS) {
+        let search = filter
+            .and_then(|filter| filter.q.as_deref())
+            .unwrap_or_default()
+            .to_lowercase();
+        let ids = filter.and_then(|filter| filter.ids.as_ref());
+        let matching = list.iter().filter(|listed| {
+            if let Some(ids) = ids {
+                return listed["Id"]
+                    .as_str()
+                    .is_some_and(|id| ids.iter().any(|target| target == id));
+            }
+            search.is_empty() || matches_search(listed, &search)
+        });
+        let mut truncated = false;
+        for (index, listed) in matching.enumerate() {
+            if index == MAX_CONTAINERS {
+                truncated = true;
+                break;
+            }
             let Some(id) = listed["Id"].as_str().filter(|id| valid_id(id)) else {
                 continue;
             };
@@ -113,11 +134,7 @@ impl Engine<'_> {
             "status": "available",
             "engine_id": clipped(&info["ID"], 128),
             "engine_version": clipped(&version["Version"], 128),
-            "engine_kind": if os.as_deref().is_some_and(|os| os.to_ascii_lowercase().contains("docker desktop")) {
-                "desktop"
-            } else {
-                "native"
-            },
+            "engine_kind": engine_kind(os.as_deref()),
             "endpoint_fingerprint": fingerprint(self.socket),
             "containers": containers,
             "truncated": truncated,
@@ -210,15 +227,38 @@ pub(super) fn inventory_status(status: &str) -> Value {
     })
 }
 
+fn engine_kind(os: Option<&str>) -> Option<&'static str> {
+    let os = os.map(str::trim).filter(|os| !os.is_empty())?;
+    Some(if os.to_ascii_lowercase().contains("docker desktop") {
+        "desktop"
+    } else {
+        "native"
+    })
+}
+
 fn fingerprint(socket: &Path) -> String {
     format!("{:x}", Sha256::digest(socket.as_os_str().as_bytes()))
 }
 
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     id.len() == 64
         && id
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn matches_search(listed: &Value, search: &str) -> bool {
+    let fields = [
+        &listed["Id"],
+        &listed["Image"],
+        &listed["Labels"]["com.docker.compose.project"],
+        &listed["Labels"]["com.docker.compose.service"],
+    ];
+    fields
+        .into_iter()
+        .chain(listed["Names"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .any(|value| value.to_lowercase().contains(search))
 }
 
 fn clipped(value: &Value, max: usize) -> Option<String> {
@@ -402,6 +442,14 @@ fn unix_timestamp(value: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn engine_kind_requires_operating_system() {
+        assert_eq!(super::engine_kind(None), None);
+        assert_eq!(super::engine_kind(Some("  ")), None);
+        assert_eq!(super::engine_kind(Some("Docker Desktop")), Some("desktop"));
+        assert_eq!(super::engine_kind(Some("Ubuntu")), Some("native"));
+    }
+
     use super::*;
 
     #[test]

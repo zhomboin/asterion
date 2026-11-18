@@ -1,21 +1,10 @@
-/*
- * 应用外壳：玻璃画框 → 侧边栏 + 工作区（顶栏 + 内容）。
- */
-
-/* ---------- 画框 App frame ---------- */
+/* 侧边栏与工作区 */
 .app-frame {
   display: grid;
   grid-template-columns: 15rem minmax(0, 1fr);
   gap: var(--space-4);
   min-height: calc(100vh - 2 * clamp(.5rem, 1.6vw, 1.25rem));
   margin: clamp(.5rem, 1.6vw, 1.25rem);
-  padding: var(--space-4);
-  border: 1px solid var(--frame-border);
-  border-radius: var(--radius-xl);
-  background: var(--frame);
-  box-shadow: var(--shadow-lg), var(--shadow-inset);
-  backdrop-filter: var(--blur);
-  -webkit-backdrop-filter: var(--blur);
 }
 
 /* ---------- 品牌 Brand ---------- */
@@ -196,7 +185,7 @@
 }
 
 @media (max-width: 40rem) {
-  .app-frame { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); margin: var(--space-2); padding: var(--space-2); border-radius: var(--radius-lg); }
+  .app-frame { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); margin: var(--space-2); }
   .sidebar {
     position: static;
     flex-direction: row;

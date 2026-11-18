@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Node } from '../api';
 import { NodeStatus, PageHeader, Problem, Tabs, Timestamp } from '../ui';
+import { NodeDialog } from '../NodeDialog';
 import { useResource } from '../useResource';
 import { MetricsPanel } from './MetricsPanel';
 import { ProcessesPanel } from './ProcessesPanel';
@@ -25,14 +26,16 @@ type Tab = (typeof tabs)[number][0] | 'command' | 'terminal';
 export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () => void }) {
   const base = '/nodes/' + encodeURIComponent(id);
   const node = useResource<Node>(base, onExpired, 5_000);
-  const [tab, setTab] = useState<Tab>('metrics');
+  const [initialUnit] = useState(() => new URLSearchParams(window.location.search).get('service') ?? undefined);
+  const [tab, setTab] = useState<Tab>(initialUnit ? 'systemd' : 'metrics');
   const data = node.data;
   const online = data?.status === 'online' && !node.error;
   const operationCatalog = useResource<OperationCatalog>(online ? base + '/operation-catalog' : null, onExpired, 30_000);
   const terminal = useResource<{ enabled: boolean }>(online ? base + '/terminal/capability' : null, onExpired, 30_000);
-  const hasTerminal = Boolean(terminal.data?.enabled && !terminal.error);
+  const hasTerminal = Boolean(online && terminal.data?.enabled && !terminal.error);
+  const [connect, setConnect] = useState(false);
   const [proposal, setProposal] = useState<{ action: OperationAction; name?: string }>();
-  const operations: NodeOperations | undefined = operationCatalog.data?.enabled && !operationCatalog.error
+  const operations: NodeOperations | undefined = online && operationCatalog.data?.enabled && !operationCatalog.error
     ? { catalog: operationCatalog.data, propose: (action, name) => setProposal({ action, name }) }
     : undefined;
   const canOperate = operations !== undefined;
@@ -61,7 +64,8 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
             title={data.name}
             scope={<>{data.kind === 'wsl' ? '监控范围 · WSL' : '监控范围 · Linux'}{data.wsl_distro && ' · ' + data.wsl_distro}</>}
             actions={<>
-              {operations && <a className="text-link" href={'/operations?node_id=' + encodeURIComponent(id)}>任务记录</a>}
+              <a className="text-link" href={'/operations?node_id=' + encodeURIComponent(id)}>任务记录</a>
+              <button type="button" onClick={() => setConnect(true)}>Agent 接入</button>
               <NodeStatus node={data} />
             </>}
           />
@@ -73,15 +77,22 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
           </dl>
           <Tabs label="节点监控视图" items={tabItems} value={activeTab} onChange={setTab} />
           {activeTab === 'metrics' && <MetricsPanel base={base} onExpired={onExpired} />}
-          {activeTab !== 'metrics' && data.status !== 'online' && (
-            <p className="empty">{data.status === 'pending' ? 'Agent 尚未连接' : 'Agent 离线，实时查询暂不可用'}</p>
+          {activeTab === 'accounts' && !online && (
+            <p className="empty">{node.error ? '暂时无法确认 Agent 状态' : data.status === 'pending' ? 'Agent 尚未连接' : 'Agent 离线，实时查询暂不可用'}</p>
           )}
-          {data.status === 'online' && activeTab === 'processes' && <ProcessesPanel base={base} onExpired={onExpired} operations={operations} />}
-          {data.status === 'online' && activeTab === 'docker' && <DockerPanel base={base} onExpired={onExpired} operations={operations} />}
-          {data.status === 'online' && activeTab === 'systemd' && <SystemdPanel base={base} onExpired={onExpired} operations={operations} />}
+          {activeTab === 'processes' && <ProcessesPanel base={base} online={online} onExpired={onExpired} operations={operations} />}
+          {activeTab === 'docker' && <DockerPanel base={base} online={online} onExpired={onExpired} operations={operations} />}
+          {activeTab === 'systemd' && <SystemdPanel
+            base={base}
+            agentState={node.error ? 'unknown' : data.status}
+            initialUnit={initialUnit}
+            onExpired={onExpired}
+            operations={operations}
+          />}
           {activeTab === 'command' && operations && <CommandPanel controls={operations} />}
           {activeTab === 'terminal' && hasTerminal && <TerminalPanel nodeId={id} onExpired={onExpired} />}
-          {data.status === 'online' && activeTab === 'accounts' && <AccountsPanel base={base} onExpired={onExpired} operations={operations} />}
+          {online && activeTab === 'accounts' && <AccountsPanel base={base} onExpired={onExpired} operations={operations} />}
+          {connect && <NodeDialog node={data} connect onClose={() => setConnect(false)} onUpdated={node.refresh} onExpired={onExpired} />}
           {proposal && operations && (
             <ProposalDialog
               nodeId={id}

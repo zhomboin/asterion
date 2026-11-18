@@ -271,9 +271,11 @@ pub(super) async fn cancel(
     let mut tx = pool.begin().await?;
     storage::expire(&mut tx).await?;
     let (node, state) = sqlx::query_as::<_, (String, String)>(
-        "SELECT node_id, state FROM operation_jobs WHERE id = ?",
+        "SELECT node_id, state FROM operation_jobs WHERE id = ? AND actor = ? AND session_hash = ?",
     )
     .bind(&id)
+    .bind(&session.username)
+    .bind(session.binding().as_slice())
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(NOT_FOUND)?;

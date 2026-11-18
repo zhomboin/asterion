@@ -66,6 +66,7 @@ export type OperationSummary = {
 
 export type OperationList = { operations: OperationSummary[]; has_more: boolean };
 export type OperationDetail = OperationSummary & {
+  can_cancel: boolean;
   output: string | null;
   truncated: boolean;
   audit: { action: string; observed_at: number; actor: string | null }[];

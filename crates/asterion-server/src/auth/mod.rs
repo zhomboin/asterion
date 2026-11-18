@@ -15,6 +15,9 @@ use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use crate::agent_bus::AgentBus;
+use crate::terminal::TerminalHub;
+
 use self::rate::LoginThrottle;
 use self::session::{expire_cookie, login_cookie, session_hash};
 
@@ -116,6 +119,8 @@ async fn login(
 async fn logout(
     _: Csrf,
     State(pool): State<SqlitePool>,
+    terminals: Option<Extension<Arc<TerminalHub>>>,
+    bus: Option<Extension<Arc<AgentBus>>>,
     headers: HeaderMap,
 ) -> Result<Response, AuthError> {
     if let Some(hash) = session_hash(&headers) {
@@ -124,6 +129,9 @@ async fn logout(
             .execute(&pool)
             .await
             .map_err(AuthError::internal)?;
+        if let (Some(Extension(terminals)), Some(Extension(bus))) = (terminals, bus) {
+            terminals.revoke_binding(&hash, &bus);
+        }
         if deletion.rows_affected() != 0 {
             tracing::info!(action = "panel_logout", outcome = "success", "管理面板注销");
         }

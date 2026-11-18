@@ -152,7 +152,7 @@ fn base_unit(name: &str) -> Unit {
     }
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     name.len() <= 255
         && name.ends_with(".service")
         && name

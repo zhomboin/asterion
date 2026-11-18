@@ -1,6 +1,7 @@
 mod api;
 mod credentials;
 mod error;
+mod hosts;
 mod model;
 mod socket;
 mod stream;

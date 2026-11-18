@@ -22,17 +22,13 @@ const MISSING: ApiError = ApiError::new(StatusCode::NOT_FOUND, "terminal_closed"
 const DISABLED: ApiError =
     ApiError::new(StatusCode::FORBIDDEN, "terminal_disabled", "中心未启用终端");
 
-pub fn routes(enabled: bool) -> Router<SqlitePool> {
+pub(crate) fn routes() -> Router<SqlitePool> {
     Router::new()
         .route("/api/v1/nodes/{node}/terminal/capability", get(capability))
         .route("/api/v1/nodes/{node}/terminal", post(open))
         .route("/api/v1/terminal/{id}", get(poll).delete(close))
         .route("/api/v1/terminal/{id}/input", post(input))
         .route("/api/v1/terminal/{id}/resize", post(resize))
-        .layer(Extension(Arc::new(TerminalHub {
-            enabled,
-            sessions: Mutex::new(HashMap::new()),
-        })))
 }
 
 struct Session {
@@ -41,12 +37,37 @@ struct Session {
     deadline: Instant,
 }
 
-struct TerminalHub {
+pub(crate) struct TerminalHub {
     enabled: bool,
     sessions: Mutex<HashMap<String, Session>>,
 }
 
 impl TerminalHub {
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(crate) fn revoke_binding(&self, binding: &[u8; 32], bus: &Arc<AgentBus>) {
+        let mut revoked = Vec::new();
+        self.sessions
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .retain(|id, session| {
+                if &session.binding == binding {
+                    revoked.push((id.clone(), session.node.clone()));
+                    false
+                } else {
+                    true
+                }
+            });
+        for (id, node) in revoked {
+            close_in_background(bus, node, id);
+        }
+    }
+
     fn reserve(&self, node: &str, session: &AdminSession) -> Result<String, ApiError> {
         if !self.enabled {
             return Err(DISABLED);
@@ -126,14 +147,28 @@ impl Drop for OpeningReservation<'_> {
         };
         self.hub.forget(&id);
         if self.dispatched {
-            let node = self.node.to_owned();
-            let bus = Arc::clone(self.bus);
-            // 结果未确认时，尝试关闭可能已启动的同一会话。
-            tokio::spawn(async move {
-                let _ = bus.query(&node, "terminal_close", json!({"id":id})).await;
-            });
+            close_in_background(self.bus, self.node.to_owned(), id);
         }
     }
+}
+
+fn close_in_background(bus: &Arc<AgentBus>, node: String, id: String) {
+    let bus = Arc::clone(bus);
+    tokio::spawn(async move {
+        for attempt in 0..3 {
+            match bus.query(&node, "terminal_close", json!({"id":id})).await {
+                Ok(_) => return,
+                Err(error) if session_unavailable(&error) => return,
+                Err(BusError::Busy | BusError::Timeout) if attempt < 2 => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(_) => {
+                    tracing::warn!(node_id = %node, terminal_id = %id, "无法确认终端会话已关闭");
+                    return;
+                }
+            }
+        }
+    });
 }
 
 async fn capability(
@@ -208,12 +243,13 @@ async fn open(
             )),
             other => OpenError::Auth(other),
         })?;
-    let mut conn = pool
-        .acquire()
+    // 将会话复核和终端登记与注销使用的数据库写入串行化。
+    let mut tx = pool
+        .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| OpenError::Api(error.into()))?;
     session
-        .ensure_active(&mut conn)
+        .ensure_active(&mut tx)
         .await
         .map_err(OpenError::Auth)?;
     let id = hub.reserve(&node, &session).map_err(OpenError::Api)?;
@@ -234,7 +270,9 @@ async fn open(
         )
         .map_err(|error| OpenError::Api(bus_error(error)))?;
     reservation.dispatched = true;
-    drop(conn);
+    tx.commit()
+        .await
+        .map_err(|error| OpenError::Api(error.into()))?;
     let result = pending
         .wait()
         .await
@@ -246,6 +284,8 @@ async fn open(
             "节点未确认终端开启",
         )));
     }
+    // 如果等待 Agent 时登录会话被注销，释放保留项并再次关闭该终端。
+    hub.node(&id, &session).map_err(OpenError::Api)?;
     let id = reservation.commit();
     tracing::info!(action = "terminal_open", actor = %session.username, node_id = %node, terminal_id = %id, "终端会话已开启");
     Ok((StatusCode::CREATED, Json(json!({"id":id}))))
@@ -427,9 +467,78 @@ impl IntoResponse for OpenError {
 #[cfg(test)]
 mod tests {
     use asterion_protocol::AgentReply;
+    use axum::body::Body;
+    use axum::http::{Request, header};
+    use sha2::{Digest, Sha256};
+    use tower::ServiceExt;
 
     use super::*;
     use crate::agent_bus::Control;
+
+    #[tokio::test]
+    async fn logout_closes_only_terminals_bound_to_its_panel_session() {
+        let pool = crate::database::connect("sqlite::memory:").await.unwrap();
+        let bus = Arc::new(AgentBus::new(15));
+        let hub = Arc::new(TerminalHub::new(true));
+        let node = "3".repeat(32);
+        let mut agent = bus.attach(&node, true);
+        let token = "c".repeat(64);
+        let binding: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+        let owner_id = "1".repeat(32);
+        let neighbor_id = "2".repeat(32);
+        for (id, binding) in [(owner_id.clone(), binding), (neighbor_id.clone(), [4; 32])] {
+            hub.sessions.lock().unwrap().insert(
+                id,
+                Session {
+                    node: node.clone(),
+                    binding,
+                    deadline: Instant::now() + LIFETIME,
+                },
+            );
+        }
+        sqlx::query("INSERT INTO panel_admin (id, username, password_hash) VALUES (1, 'fixture', 'test-only')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO panel_sessions (token_hash, admin_id, expires_at) VALUES (?, 1, unixepoch() + 30)")
+            .bind(binding.as_slice()).execute(&pool).await.unwrap();
+        let router = crate::auth::routes()
+            .layer(Extension(Arc::clone(&hub)))
+            .layer(Extension(bus))
+            .with_state(pool.clone());
+        let cookie = format!("__Host-asterion_session={token}");
+        let response = router
+            .oneshot(
+                Request::post("/api/v1/auth/logout")
+                    .header(header::COOKIE, cookie)
+                    .header("x-asterion-csrf", "1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM panel_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        {
+            let sessions = hub.sessions.lock().unwrap();
+            assert_eq!(sessions.len(), 1);
+            assert!(sessions.contains_key(&neighbor_id));
+        }
+        let Control::Task(dispatch) = tokio::time::timeout(Duration::from_secs(2), agent.next())
+            .await
+            .unwrap()
+        else {
+            panic!("expected logout cleanup dispatch");
+        };
+        assert_eq!(dispatch.request.kind, "terminal_close");
+        assert_eq!(dispatch.request.args, json!({"id":owner_id}));
+        dispatch
+            .response
+            .send(AgentReply::Success { value: Value::Null })
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn abandoned_terminal_open_releases_its_slot_and_closes_only_its_id() {

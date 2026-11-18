@@ -217,7 +217,7 @@ export function App() {
         <main className="dashboard">
           {logoutError && <p className="notice" role="alert">{logoutError}</p>}
           {(active.page === 'overview' || active.page === 'nodes') && <NodesPage manage={active.page === 'nodes'} onExpired={expire} />}
-          {active.page === 'node' && <NodeDetailPage id={active.id} onExpired={expire} />}
+          {active.page === 'node' && <NodeDetailPage key={active.id} id={active.id} onExpired={expire} />}
           {active.page === 'assets' && <AssetListPage onExpired={expire} />}
           {active.page === 'asset' && <AssetDetailPage id={active.id} onExpired={expire} />}
           {active.page === 'operations' && <OperationsPage onExpired={expire} />}
@@ -236,7 +236,7 @@ const navigation: { href: string; label: string; icon: IconName; pages: Destinat
   { href: '/overview', label: '总览', icon: 'overview', pages: ['overview'] },
   { href: '/nodes', label: '节点', icon: 'nodes', pages: ['nodes', 'node'] },
   { href: '/assets', label: '资产', icon: 'assets', pages: ['assets', 'asset'] },
-  { href: '/operations', label: '运维', icon: 'operations', pages: ['operations', 'operation'] },
+  { href: '/operations', label: '运维任务', icon: 'operations', pages: ['operations', 'operation'] },
   { href: '/alerts', label: '告警', icon: 'alerts', pages: ['alerts'] },
   { href: '/settings', label: '设置', icon: 'settings', pages: ['settings'] },
 ];

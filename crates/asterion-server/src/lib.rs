@@ -11,6 +11,7 @@ pub mod model;
 pub mod monitor;
 pub mod nodes;
 pub mod operations;
+pub mod service_monitors;
 pub mod settings;
 pub mod terminal;
 pub mod trends;

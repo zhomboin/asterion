@@ -28,8 +28,16 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 )]
 enum Request {
     Docker,
+    DockerFiltered(InventoryFilter),
     DockerStats(Container),
     DockerLogs(Logs),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InventoryFilter {
+    ids: Option<Vec<String>>,
+    q: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -53,6 +61,22 @@ impl Request {
     fn check(&self) -> Result<(), CollectorError> {
         match self {
             Self::Docker => return Ok(()),
+            Self::DockerFiltered(filter) => {
+                let valid = match (&filter.ids, &filter.q) {
+                    (Some(ids), None) => {
+                        !ids.is_empty()
+                            && ids.len() <= 24
+                            && ids.iter().all(|id| engine::valid_id(id))
+                    }
+                    (None, Some(q)) => q.len() <= 256 && !q.chars().any(char::is_control),
+                    _ => false,
+                };
+                return if valid {
+                    Ok(())
+                } else {
+                    Err(CollectorError::INVALID)
+                };
+            }
             Self::DockerLogs(logs)
                 if logs
                     .lines
@@ -63,7 +87,7 @@ impl Request {
             _ => {}
         }
         let id = match self {
-            Self::Docker => unreachable!(),
+            Self::Docker | Self::DockerFiltered(_) => unreachable!(),
             Self::DockerStats(container) => &container.id,
             Self::DockerLogs(logs) => &logs.id,
         };
@@ -92,6 +116,9 @@ pub(crate) fn query(
     args: Value,
 ) -> Result<Value, CollectorError> {
     let request = match kind {
+        "docker" if args.get("q").is_some() || args.get("ids").is_some() => {
+            Request::DockerFiltered(parse_args(args)?)
+        }
         "docker" => {
             parse_args::<Empty>(args)?;
             Request::Docker
@@ -101,7 +128,7 @@ pub(crate) fn query(
         _ => return Err(CollectorError::INVALID),
     };
     request.check()?;
-    let inventory = matches!(request, Request::Docker);
+    let inventory = matches!(request, Request::Docker | Request::DockerFiltered(_));
     let Some(path) = reader_path else {
         return if inventory {
             Ok(engine::inventory_status("disabled"))

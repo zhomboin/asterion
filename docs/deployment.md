@@ -113,7 +113,7 @@ sudo systemctl restart asterion-server.service
 
 ## 4. 安装和注册 Agent
 
-在每台目标机验证上传文件后，准备 Agent 的安装位置。WSL Ubuntu 使用同一 Agent。运行 systemd 样例需要该发行版已启用 systemd，也可使用[本地开发](development.md#5-注册一个本地-agent)中的命令直接启动。
+在每台目标机验证上传文件后，准备 Agent 的安装位置。WSL Ubuntu 使用同一 Agent。更新部署时，中心、Agent 和 Docker 只读采集程序应使用同一构建产物，以支持按需查询已纳管的进程和容器。运行 systemd 样例需要该发行版已启用 systemd，也可使用[本地开发](development.md#5-注册一个本地-agent)中的命令直接启动。
 
 ```bash
 sudo apt-get update
@@ -147,7 +147,7 @@ LoadCredential=ca.pem:/etc/asterion-agent/ca.pem
 Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
 ```
 
-在「节点」创建节点，选择 Linux 或 WSL 并保存注册凭证。凭证仅在创建或重新签发时显示，有效期 10 分钟。用编辑器将凭证写为一行。
+在「节点」点击「接入服务器」，填写名称并选择 Linux 或 WSL。生成凭证后，确认弹窗中的中心地址可由目标服务器访问。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
 
 ```bash
 sudo install -m 0600 /dev/null /etc/asterion-agent/enrollment
@@ -192,7 +192,7 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8080:127.0.0.1:8080 "$target"
 
 证书包含 `127.0.0.1` 时可以打开 `https://127.0.0.1:8080/login`。证书仅包含域名时，将该域名在客户端解析到本机回环，使用该域名打开同一转发端口。完成后按 `Ctrl+C` 关闭隧道。
 
-节点断线超过 20 秒后显示离线，凭证吊销后旧 Agent 无法继续刷新心跳。要替换凭证，在节点管理中重新签发，该操作保留节点 ID 并作废原设备凭证及旧注册凭证。先停止 Agent，移走旧身份文件，再按第 4 节的注册凭证配置和启动步骤操作。
+节点断线超过 20 秒后显示离线，凭证吊销后旧 Agent 无法继续刷新心跳。要替换凭证，在节点列表或详情打开「Agent 接入」并确认换发，该操作保留节点 ID 并作废原设备凭证及旧注册凭证。先停止 Agent，移走旧身份文件，再按第 4 节的注册凭证配置和启动步骤操作。
 
 ```bash
 sudo systemctl stop asterion-agent.service
@@ -306,7 +306,7 @@ sudo systemctl start asterion-agent.service
 
 ## 7. 升级与卸载
 
-升级前备份数据。用新构建编号和各自的解包命令准备中心和 Agent 发布目录。保留已有环境文件、TLS 和身份，使用以下命令更新对应 unit 和 `current` 链接。先升级中心并验证，再按节点升级 Agent。中心启动时执行数据库迁移。
+升级前备份数据。用新构建编号和各自的解包命令准备中心和 Agent 发布目录。保留已有环境文件、TLS 和身份，使用以下命令更新对应 unit 和 `current` 链接。先升级中心并验证，再按节点升级 Agent。中心启动时执行数据库迁移。升级后检查中心健康，打开节点的 systemd 页签核对已开启监控的 Unit 继续更新。单个服务的监控配置、状态历史与告警保存在中心 SQLite 数据库中，随数据库一起备份。[单个服务监控](monitoring-and-operations.md#单个-systemd-服务监控)
 
 ```bash
 sudo systemctl stop asterion-server.service
@@ -379,7 +379,7 @@ sudo systemctl daemon-reload
 
 ## 8. 启用可选能力
 
-默认安装可以查看主机指标、进程和 systemd，并使用服务资产和告警。以下服务只在需要对应能力时安装。确认授权范围后执行选中的步骤。详细的能力边界和中心环境变量见[采集与运维配置](monitoring-and-operations.md)。
+默认安装可以查看主机指标和进程，在 systemd 节点上查询服务或开启单个 Unit 的持续监控，并使用服务资产和告警。以下服务只在需要对应能力时安装。确认授权范围后执行选中的步骤。详细的能力边界和中心环境变量见[采集与运维配置](monitoring-and-operations.md)。
 
 ### Docker 读取
 

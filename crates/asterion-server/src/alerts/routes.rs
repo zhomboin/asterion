@@ -104,6 +104,8 @@ struct Event {
     opened_at: i64,
     updated_at: i64,
     resolved_at: Option<i64>,
+    unit: Option<String>,
+    resolution: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -124,15 +126,25 @@ pub(super) async fn events(
         return Err(ApiError::INVALID);
     }
     let mut alerts = sqlx::query_as::<_, Event>(
-        "SELECT *, CASE WHEN resolved_at IS NULL THEN 'active' ELSE 'resolved' END AS status
-         FROM alert_events WHERE (? IS NULL OR node_id = ?)
-         AND (? = 'all' OR (? = 'active' AND resolved_at IS NULL) OR (? = 'resolved' AND resolved_at IS NOT NULL))
-         ORDER BY opened_at DESC, id LIMIT ? OFFSET ?",
+        "WITH events AS (
+            SELECT id, rule_id, node_id, node_name, metric, threshold, value,
+                   opened_at, updated_at, resolved_at, NULL AS unit, NULL AS resolution
+            FROM alert_events
+            WHERE (?1 IS NULL OR node_id = ?1)
+            UNION ALL
+            SELECT id, monitor_id AS rule_id, node_id, node_name, 'service' AS metric,
+                   NULL AS threshold, NULL AS value, opened_at, updated_at, resolved_at,
+                   unit, resolution
+            FROM service_alert_events
+            WHERE (?1 IS NULL OR node_id = ?1)
+         )
+         SELECT *, CASE WHEN resolved_at IS NULL THEN 'active' ELSE 'resolved' END AS status
+         FROM events
+         WHERE (?2 = 'all' OR (?2 = 'active' AND resolved_at IS NULL)
+                          OR (?2 = 'resolved' AND resolved_at IS NOT NULL))
+         ORDER BY opened_at DESC, id LIMIT ?3 OFFSET ?4",
     )
     .bind(&filter.node_id)
-    .bind(&filter.node_id)
-    .bind(state)
-    .bind(state)
     .bind(state)
     .bind(i64::from(limit) + 1)
     .bind(offset)

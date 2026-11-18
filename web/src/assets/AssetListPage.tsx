@@ -5,7 +5,7 @@ import { useResource } from '../useResource';
 import { AssetForm } from './AssetForm';
 import { managementLabels, managementOptions, type AssetResults } from './data';
 
-const pageSize = 50;
+const pageSize = 12;
 
 export function AssetListPage({ onExpired }: { onExpired: () => void }) {
   const initialNode = new URLSearchParams(window.location.search).get('node_id') ?? '';

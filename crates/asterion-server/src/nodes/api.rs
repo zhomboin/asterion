@@ -7,6 +7,7 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::credentials::{self, IssuedEnrollment, random_hex};
 use super::error::ApiError;
+use super::hosts;
 use super::model::{self, NodeFilters, NodeInput, NodeList, NodePatch, NodeStatus, NodeView};
 use crate::auth::{AdminSession, Csrf};
 
@@ -18,6 +19,7 @@ pub(super) struct Pagination {
     q: Option<String>,
     tag: Option<String>,
     status: Option<NodeStatus>,
+    metrics: Option<bool>,
 }
 
 pub(super) async fn list(
@@ -35,6 +37,7 @@ pub(super) async fn list(
         q: filter_text(query.q, 100)?,
         tag: filter_text(query.tag, 32)?,
         status: query.status,
+        with_metrics: query.metrics.unwrap_or_default(),
     };
     Ok(Json(model::list(&pool, limit, offset, &filters).await?))
 }
@@ -67,16 +70,23 @@ pub(super) async fn create(
     let Json(input) = body.map_err(ApiError::invalid_json)?;
     let input = input.validate()?;
     let id = random_hex::<16>()?;
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let host_id = match input.host_name.as_deref() {
+        Some(name) => Some(hosts::resolve_id(&mut tx, input.kind.as_str(), name).await?),
+        None => None,
+    };
 
-    sqlx::query("INSERT INTO nodes (id, name, kind, tags, notes) VALUES (?, ?, ?, ?, ?)")
-        .bind(&id)
-        .bind(&input.name)
-        .bind(input.kind.as_str())
-        .bind(model::tags_json(&input.tags)?)
-        .bind(&input.notes)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO nodes (id, host_id, name, kind, tags, notes) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(host_id)
+    .bind(&input.name)
+    .bind(input.kind.as_str())
+    .bind(model::tags_json(&input.tags)?)
+    .bind(&input.notes)
+    .execute(&mut *tx)
+    .await?;
 
     let enrollment = credentials::issue(&mut tx, &id).await?;
     model::audit(&mut tx, &session.username, &id, "node_create").await?;
@@ -96,12 +106,24 @@ pub(super) async fn update(
     let input = input.validate()?;
     let kind = input.kind.map(|kind| kind.as_str());
     let tags = input.tags.as_deref().map(model::tags_json).transpose()?;
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let existing_kind = sqlx::query_scalar::<_, String>("SELECT kind FROM nodes WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+    let effective_kind = kind.unwrap_or(&existing_kind);
+    let host_id = match input.host_name.as_ref().and_then(|name| name.as_deref()) {
+        Some(name) => Some(hosts::resolve_id(&mut tx, effective_kind, name).await?),
+        None => None,
+    };
+    let replace_host = input.host_name.is_some() || effective_kind != existing_kind;
 
-    let result = sqlx::query(
+    sqlx::query(
         "UPDATE nodes SET name = COALESCE(?, name), kind = COALESCE(?, kind),
              tags = COALESCE(?, tags), notes = COALESCE(?, notes),
              wsl_distro = CASE WHEN ? = 'linux' THEN NULL ELSE wsl_distro END,
+             host_id = CASE WHEN ? THEN ? ELSE host_id END,
              updated_at = unixepoch()
          WHERE id = ?",
     )
@@ -110,12 +132,11 @@ pub(super) async fn update(
     .bind(tags)
     .bind(&input.notes)
     .bind(kind)
+    .bind(replace_host)
+    .bind(host_id)
     .bind(&id)
     .execute(&mut *tx)
     .await?;
-    if result.rows_affected() == 0 {
-        return Err(ApiError::NOT_FOUND);
-    }
 
     model::audit(&mut tx, &session.username, &id, "node_update").await?;
     tx.commit().await?;
