@@ -218,3 +218,158 @@ async fn list_combines_name_tag_and_status_before_pagination() {
     .await;
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn list_includes_latest_metrics_per_node_when_requested() {
+    let pool = database::connect("sqlite::memory:").await.unwrap();
+    let (_shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let router = app::router(
+        pool.clone(),
+        None,
+        shutdown_receiver,
+        AgentBus::new(15).into(),
+    );
+    let session = admin_cookie(&pool, &router).await;
+    let cookie = Some(session.as_str());
+
+    sqlx::query(
+        "INSERT INTO nodes (id, name, kind, created_at) VALUES
+         ('dev-1', 'Development', 'linux', 1),
+         ('dev-2', 'Staging', 'wsl', 2),
+         ('dev-3', 'Production', 'linux', 3)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (node, when, sample) in [
+        ("dev-1", 1, json!({"cpu_percent": 80.0})),
+        (
+            "dev-1",
+            2,
+            json!({
+                "cpu_percent": 0.0,
+                "memory": {"total_bytes": 200, "used_bytes": 50},
+                "filesystems": [
+                    {"total_bytes": 100, "available_bytes": 100},
+                    {"total_bytes": 200, "available_bytes": 50},
+                ],
+            }),
+        ),
+        ("dev-1", i64::MAX, json!({"cpu_percent": 95.0})),
+        ("dev-2", 3, json!({"cpu_percent": 10.0})),
+    ] {
+        sqlx::query("INSERT INTO metric_samples (node_id, observed_at, sample) VALUES (?, ?, ?)")
+            .bind(node)
+            .bind(when)
+            .bind(sample.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "UPDATE nodes SET last_seen_at = CASE WHEN id = 'dev-1' THEN unixepoch() ELSE 1 END
+         WHERE id IN ('dev-1', 'dev-3')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agent_credentials (fingerprint, node_id, created_at, connection_generation)
+         VALUES (zeroblob(32), 'dev-1', unixepoch(), 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let list = |path| request(&router, "GET", path, cookie, false, Value::Null);
+    let result = response_json(list("/api/v1/nodes?metrics=true").await, StatusCode::OK).await;
+    assert_eq!(
+        result["nodes"][0]["metrics"],
+        json!({"observed_at": 2, "cpu_percent": 0.0, "memory_percent": 25.0, "disk_percent": 75.0}),
+    );
+    assert_eq!(
+        result["nodes"][1]["metrics"],
+        json!({"observed_at": 3, "cpu_percent": 10.0, "memory_percent": null, "disk_percent": null}),
+    );
+    assert!(result["nodes"][2].get("metrics").is_none());
+    let paginated = response_json(
+        list("/api/v1/nodes?metrics=true&limit=1&q=staging").await,
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(paginated["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        paginated["status_counts"],
+        json!({"pending": 1, "online": 1, "offline": 1})
+    );
+    let default = response_json(list("/api/v1/nodes").await, StatusCode::OK).await;
+    assert!(default["nodes"][0].get("metrics").is_none());
+    assert!(default.get("status_counts").is_none());
+}
+
+#[tokio::test]
+async fn nodes_can_share_preserve_and_clear_host_binding() {
+    let pool = database::connect("sqlite::memory:").await.unwrap();
+    let (_shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let router = app::router(
+        pool.clone(),
+        None,
+        shutdown_receiver,
+        AgentBus::new(15).into(),
+    );
+    let session = admin_cookie(&pool, &router).await;
+    let cookie = Some(session.as_str());
+
+    let create = |node, host| {
+        request(
+            &router,
+            "POST",
+            "/api/v1/nodes/enrollment-token",
+            cookie,
+            true,
+            json!({"name": node, "kind": "wsl", "host_name": host}),
+        )
+    };
+    let first = response_json(create("Dist 1", " Twin ").await, StatusCode::CREATED).await;
+    let second = response_json(create("Dist 2", "Twin").await, StatusCode::CREATED).await;
+    let first_path = format!("/api/v1/nodes/{}", first["node_id"].as_str().unwrap());
+    let second_path = format!("/api/v1/nodes/{}", second["node_id"].as_str().unwrap());
+    let get = |path| request(&router, "GET", path, cookie, false, Value::Null);
+    let first = response_json(get(&first_path).await, StatusCode::OK).await;
+    let second = response_json(get(&second_path).await, StatusCode::OK).await;
+    assert_eq!(first["host_name"], "Twin");
+    assert!(first["host_id"].as_str().is_some());
+    assert_eq!(first["host_id"], second["host_id"]);
+    let host_kind = sqlx::query_scalar::<_, String>("SELECT kind FROM hosts WHERE id = ?")
+        .bind(first["host_id"].as_str().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(host_kind, "windows");
+
+    let patch = |path, body| request(&router, "PATCH", path, cookie, true, body);
+    let revised = response_json(
+        patch(&first_path, json!({"notes": "one"})).await,
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(revised["host_id"], first["host_id"]);
+    assert_eq!(
+        patch(&first_path, json!({"host_name": "   "}))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let cleared = response_json(
+        patch(&first_path, json!({"host_name": null})).await,
+        StatusCode::OK,
+    )
+    .await;
+    assert!(cleared["host_id"].is_null());
+    assert!(cleared["host_name"].is_null());
+    let moved = response_json(
+        patch(&second_path, json!({"kind": "linux"})).await,
+        StatusCode::OK,
+    )
+    .await;
+    assert!(moved["host_id"].is_null());
+}

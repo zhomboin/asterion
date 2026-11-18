@@ -66,15 +66,19 @@ export function MetricsPanel({ base, onExpired }: { base: string; onExpired: () 
   );
 }
 
+function Capacity({ used, total }: { used: number; total: number }) {
+  return <>{bytes(used)} / {bytes(total)}{total > 0 && ' · ' + fraction(100 * used / total)}</>;
+}
+
 function MetricFacts({ sample }: { sample: Metrics }) {
   return (
     <dl className="detail-facts metric-facts">
       <div><dt>CPU 利用率</dt><dd>{fraction(sample.cpu_percent)}</dd></div>
       <div><dt>逻辑核心数</dt><dd>{sample.logical_cores}</dd></div>
       <div><dt>负载 1m / 5m / 15m</dt><dd>{sample.load.join(' / ')}</dd></div>
-      <div><dt>内存已用 / 总量</dt><dd>{bytes(sample.memory.used_bytes)} / {bytes(sample.memory.total_bytes)}</dd></div>
+      <div><dt>内存已用 / 总量</dt><dd><Capacity used={sample.memory.used_bytes} total={sample.memory.total_bytes} /></dd></div>
       <div><dt>可用内存</dt><dd>{bytes(sample.memory.available_bytes)}</dd></div>
-      <div><dt>交换空间已用 / 总量</dt><dd>{bytes(sample.swap.used_bytes)} / {bytes(sample.swap.total_bytes)}</dd></div>
+      <div><dt>交换空间已用 / 总量</dt><dd><Capacity used={sample.swap.used_bytes} total={sample.swap.total_bytes} /></dd></div>
     </dl>
   );
 }

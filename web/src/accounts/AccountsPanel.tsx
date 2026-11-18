@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react';
-import { DataTable, Problem } from '../ui';
+import { DataTable, Pagination, Problem } from '../ui';
 import { useResource } from '../useResource';
 import type { NodeOperations } from '../operations/data';
 import { AccountDetail } from './AccountDetail';
+import { monitorPageSize, useMonitorPage } from '../monitor/MonitorPicker';
 import type { Accounts } from './data';
 
 export function AccountsPanel({ base, onExpired, operations }: {
@@ -18,6 +19,7 @@ export function AccountsPanel({ base, onExpired, operations }: {
   const detail = users.find((user) => user.username === selection);
   const term = query.trim().toLocaleLowerCase();
   const visible = users.filter((user) => user.username.toLocaleLowerCase().includes(term) || String(user.uid) === term);
+  const page = useMonitorPage(visible.length);
   const policy = operations?.catalog.accounts;
   const newAccounts = policy?.enabled
     ? policy.usernames.filter((username) => username !== 'root' && !users.some((user) => user.username === username))
@@ -53,13 +55,13 @@ export function AccountsPanel({ base, onExpired, operations }: {
       {list.error && <Problem error={list.error} retry={list.refresh} />}
       {list.data && (
         <label className="search-field">搜索账号<input type="search" placeholder="账号名或 UID"
-          value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+          value={query} onChange={(event) => { setQuery(event.target.value); page.setOffset(0); }} /></label>
       )}
       {list.data?.truncated && <p className="observation">当前账号清单达到显示上限</p>}
       {list.data && !visible.length && <p className="empty">{term ? '没有匹配的账号' : '暂无可读取的账号'}</p>}
       {visible.length > 0 && (
         <DataTable label="Linux 账号" columns={['账号', 'UID', 'GID', 'Shell', '用户组', '操作']}>
-          {visible.map((user) => (
+          {visible.slice(page.offset, page.offset + monitorPageSize).map((user) => (
             <tr key={user.username}>
               <th scope="row">{user.username}{user.system && <div className="table-secondary">系统账号</div>}</th>
               <td>{user.uid}</td><td>{user.gid}</td><td className="technical">{user.shell}</td>
@@ -69,6 +71,7 @@ export function AccountsPanel({ base, onExpired, operations }: {
           ))}
         </DataTable>
       )}
+      <Pagination label="账号分页" offset={page.offset} pageSize={monitorPageSize} hasMore={page.hasMore} onChange={page.setOffset} />
       {detail && (
         <AccountDetail
           key={detail.username}

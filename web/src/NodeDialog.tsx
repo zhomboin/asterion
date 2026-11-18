@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
-  errorMessage, formatTime, isUnauthorized, request,
+  errorMessage, isUnauthorized, request,
   type Enrollment, type Node, type NodeDraft,
 } from './api';
+import { AgentEnrollment } from './AgentEnrollment';
 
 type Props = {
   node?: Node;
+  connect?: boolean;
   onClose: () => void;
   onUpdated: () => void;
   onExpired: () => void;
@@ -13,13 +15,12 @@ type Props = {
 
 type Step = 'form' | 'rotate' | 'revoke' | 'remove' | 'token';
 
-export function NodeDialog({ node, onClose, onUpdated, onExpired }: Props) {
+export function NodeDialog({ node, connect, onClose, onUpdated, onExpired }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [step, setStep] = useState<Step>('form');
+  const [step, setStep] = useState<Step>(connect ? 'rotate' : 'form');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [enrollment, setEnrollment] = useState<Enrollment>();
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const element = dialog.current;
@@ -46,6 +47,7 @@ export function NodeDialog({ node, onClose, onUpdated, onExpired }: Props) {
     const data = new FormData(event.currentTarget);
     const body: NodeDraft = {
       name: String(data.get('name')).trim(),
+      host_name: String(data.get('host_name') ?? '').trim() || null,
       kind: data.get('kind') === 'wsl' ? 'wsl' : 'linux',
       tags: [...new Set(String(data.get('tags')).split(/\r?\n/u).map((tag) => tag.trim()).filter(Boolean))],
       notes: String(data.get('notes')).trim(),
@@ -76,28 +78,17 @@ export function NodeDialog({ node, onClose, onUpdated, onExpired }: Props) {
     });
   }
 
-  async function copyToken() {
-    if (!enrollment) return;
-    try {
-      await navigator.clipboard.writeText(enrollment.token);
-      setCopied(true);
-      setError('');
-    } catch {
-      setError('无法复制，请手动选中注册凭证。');
-    }
-  }
-
   function goTo(next: Step) {
     setError('');
     setStep(next);
   }
 
   const titles = {
-    form: node ? '管理节点' : '登记节点',
-    rotate: '更新注册凭证',
+    form: node ? '管理节点' : '接入服务器',
+    rotate: '换发注册凭证',
     revoke: '吊销凭证',
     remove: '移除节点',
-    token: '注册凭证',
+    token: 'Agent 接入配置',
   };
 
   return (
@@ -113,6 +104,7 @@ export function NodeDialog({ node, onClose, onUpdated, onExpired }: Props) {
             <option value="linux">Linux</option>
             <option value="wsl">WSL</option>
           </select></label>
+          <label>宿主机标识<input name="host_name" defaultValue={node?.host_name ?? undefined} maxLength={100} /></label>
           <label>标签<textarea name="tags" defaultValue={node?.tags.join('\n')} placeholder="每行一个标签" rows={3} /></label>
           <label>备注<textarea name="notes" defaultValue={node?.notes} rows={3} maxLength={1000} /></label>
           {error && <p className="error" role="alert">{error}</p>}
@@ -124,7 +116,7 @@ export function NodeDialog({ node, onClose, onUpdated, onExpired }: Props) {
       )}
       {step === 'form' && node && (
         <div className="credential-actions">
-          <button className="quiet" type="button" disabled={busy} onClick={() => goTo('rotate')}>更新注册凭证</button>
+          <button className="quiet" type="button" disabled={busy} onClick={() => goTo('rotate')}>Agent 接入</button>
           <button className="danger quiet" type="button" disabled={busy} onClick={() => goTo('revoke')}>吊销凭证</button>
           <button className="danger quiet" type="button" disabled={busy} onClick={() => goTo('remove')}>移除节点</button>
         </div>
@@ -134,7 +126,7 @@ export function NodeDialog({ node, onClose, onUpdated, onExpired }: Props) {
           {step === 'remove' ? (
             <p>将移除节点 <strong>{node?.name}</strong>，并吊销该节点的全部凭证。</p>
           ) : (
-            <p>节点 <strong>{node?.name}</strong> 的现有凭证将失效，Agent 需使用新凭证接入。</p>
+            <p>节点 <strong>{node?.name}</strong> 的现有凭证将失效。{step === 'rotate' && '生成新凭证后，使用弹窗提供的配置接入 Agent。已注册的 Agent 需要先停止并移走旧身份文件。'}</p>
           )}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="dialog-actions">
@@ -145,17 +137,7 @@ export function NodeDialog({ node, onClose, onUpdated, onExpired }: Props) {
           </div>
         </>
       )}
-      {step === 'token' && enrollment && (
-        <div className="fields">
-          <p>仅显示一次，{formatTime(enrollment.expires_at)} 到期。</p>
-          <label>一次性注册凭证<textarea rows={3} readOnly spellCheck={false} value={enrollment.token} /></label>
-          {error && <p className="error" role="alert">{error}</p>}
-          <div className="dialog-actions">
-            <button type="button" onClick={copyToken}>{copied ? '已复制' : '复制'}</button>
-            <button className="primary" type="button" onClick={onClose}>完成</button>
-          </div>
-        </div>
-      )}
+      {step === 'token' && enrollment && <AgentEnrollment enrollment={enrollment} reEnroll={Boolean(node)} onClose={onClose} />}
     </dialog>
   );
 }

@@ -4,7 +4,7 @@ import { DataTable, Pagination, Problem, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { managementLabels, type AssetDetail, type Discoveries } from './data';
 
-const pageSize = 50;
+const pageSize = 12;
 
 export function AssetBindings({ asset, onChanged, onExpired }: {
   asset: AssetDetail;

@@ -33,7 +33,7 @@
 | M0（基础骨架） | 可部署、可注册 | Rust Workspace、React Web、SQLite 迁移、鉴权、Agent 连接、节点注册 |
 | M1（只读 MVP） | 首个可用版本 | 多节点总览、指标、进程、Docker/systemd 只读发现、服务资产目录、跨节点检索 |
 | M2（受控操作） | 安全运维 | Docker 启停/重启、systemd 指定服务操作、预定义命令、审批式确认、审计 |
-| M3（扩展管理） | 完善能力 | Linux 用户/公钥管理、交互终端、监控告警、长期趋势、可选 Windows Host Agent |
+| M3（扩展管理） | 完善能力 | Linux 用户/公钥管理、交互终端、监控告警、单个 systemd 服务监控、长期趋势、可选 Windows Host Agent |
 
 M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力单独授权，终端按节点明确启用。
 
@@ -67,7 +67,7 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 
 **US-03：追踪 Docker**：选择一个节点查看容器、状态、端口、镜像、重启次数、资源占用和日志。
 
-**US-04：查看进程与服务**：查看占用资源最高的进程，并能关联对应的 systemd Unit 或 Docker 服务（无法关联则显示未知）。
+**US-04：查看进程与服务**：查看占用资源最高的进程，并能关联对应的 systemd Unit 或 Docker 服务（无法关联则显示未知）。对指定 systemd 服务开启持续监控，查看状态变化、停机与恢复告警。
 
 **US-05：管理 WSL**：不依赖 WSL 动态 IP，从同一管理平台查看 WSL Ubuntu；WSL 停止时明确显示“Agent 失联”，不假定 Windows 已关机。
 
@@ -83,7 +83,7 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 
 | 编号 | 优先级 | 要求 | 验收标准 |
 |---|---|---|---|
-| NOD-001 | P0 | 中心创建节点注册凭证，Agent 主动建立 TLS 连接 | 不必开放 Agent 入站端口；节点能上线并被识别 |
+| NOD-001 | P0 | 面板提供接入服务器入口、一次性凭证和连接配置，Agent 主动建立 TLS 连接 | 不必开放 Agent 入站端口；节点能上线并被识别 |
 | NOD-002 | P0 | 按持久 Node ID 标识节点，不使用 IP 作为主键 | WSL IP 变化后仍被识别为同一节点 |
 | NOD-003 | P0 | 显示在线、离线、最近心跳、版本、系统信息 | 心跳超时标记离线；离线历史指标不被错误刷新为 0 |
 | NOD-004 | P0 | 节点可自定义名称、环境类型、标签和备注 | 支持两台 VPS 和一个 WSL Ubuntu 同时登记 |
@@ -107,7 +107,7 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 
 | 编号 | 优先级 | 要求 | 验收标准 |
 |---|---|---|---|
-| PRO-001 | P0 | 进程列表（PID、名称、CPU、内存、状态、启动时间） | 可以排序和按名称/PID 搜索 |
+| PRO-001 | P0 | 从按名称或 PID 搜索的分页发现清单选定进程监控 | 进程页默认显示已纳管名称，详情按 PID 展示观测实例及状态、CPU、内存、启动时间 |
 | PRO-002 | P0 | 按需查询进程详情（命令行、可执行路径、父 PID、运行用户） | 无权限字段用“不可用”显示，不伪造 |
 | PRO-003 | P0 | 进程快照按需读取而非全部高频上报 | 多节点切换无明显大规模历史数据积累 |
 | PRO-004 | P1 | 对指定 PID 执行 TERM；KILL 作为二次高危操作 | PID 与启动时间二次核验，避免 PID 复用误杀 |
@@ -117,7 +117,7 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 | 编号 | 优先级 | 要求 | 验收标准 |
 |---|---|---|---|
 | DOC-001 | P0 | 发现 Docker Engine、版本、连接状态 | 未安装/无权限/不可达分别展示 |
-| DOC-002 | P0 | 列出容器（ID、名称、镜像、状态、健康状态、启动时间、重启次数） | 与 `docker ps -a` 所见可核对 |
+| DOC-002 | P0 | 从可搜索、分页的发现清单选定容器监控 | 默认只显示已纳管容器，按 Engine 与完整容器 ID 查询，可查看状态、健康、启动时间和重启次数 |
 | DOC-003 | P0 | 查询容器 CPU、内存、网络指标，及最近日志 | 查询失败有准确错误；日志长度与范围受限 |
 | DOC-004 | P0 | 识别 Compose 项目/服务标签（如存在） | 缺少标签时不推测 Compose 来源 |
 | DOC-005 | P0 | 获取挂载、端口、环境元数据（敏感环境变量必须脱敏/默认不采集） | 不泄露密码、Token 等密钥 |
@@ -139,6 +139,7 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 | AST-004 | P0 | 资产变更与发现时间可追溯 | 显示 last_seen、来源和编辑时间 |
 | AST-005 | P1 | Docker、systemd、进程之间可建立关联 | 允许人工纠错，不依据名称进行强制合并 |
 | SVC-004 | P1 | 受控启停/重启指定 systemd Unit | 仅允许配置的 Unit，操作记录齐全 |
+| SVC-005 | P1 | 持续检查选定 systemd Service Unit，保留状态变化与告警 | 查看检查时间和历史，确认停止后告警、活动后恢复。离线与查询失败显示未知，已有告警保留至确认恢复或停用监控 |
 
 **资产自动发现边界**：Docker 可发现镜像、标签、挂载和端口；systemd 可发现 Unit 与部分路径；项目源码目录、仓库归属和 Nginx 反向代理业务关系通常不能百分之百推断，必须支持人工确认。Nginx 配置解析不属于 M1 必选项。
 
@@ -181,11 +182,11 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 - `/login`：登录与会话管理。
 - `/overview`：多节点卡片、在线情况、整体告警摘要。
 - `/nodes`：节点列表、节点创建、标签和筛选。
-- `/nodes/:id`：系统指标、进程、Docker、systemd、节点元信息；按页签展示。
+- `/nodes/:id`：系统指标、进程、Docker、systemd、节点元信息，按页签展示。systemd 页签包含单个服务的持续监控和历史。
 - `/assets`：跨节点服务资产列表、搜索与筛选。
 - `/assets/:id`：运行位置、运行方式、实例关联、部署路径、配置路径、仓库、备注、来源与最后观测时间。
 - `/operations`、`/operations/:id`：任务列表、状态与审计。
-- `/alerts`：节点告警、历史和规则。
+- `/alerts`：节点和单个服务的告警、历史及节点告警规则。
 - Linux 账号和终端入口在节点详情。允许的远端变更从节点和资源上下文发起。
 - `/settings`：查看中心生效的采样、保留与终端设置。通过中心配置调整这些参数，在节点管理页调整节点凭证。
 
@@ -216,11 +217,13 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 | `panel_admin`、`panel_sessions` | username、password_hash、token_hash、expires_at | 面板账号和会话 |
 | `metric_samples` | node_id、observed_at、sample | 保存原始样本与 Agent 采样时间，索引中心接收时间 |
 | `metric_rollups` | node_id、bucket_at、sample_count、各指标汇总 | 独立保留的 5 分钟趋势 |
+| `managed_resources` | node_id、kind、target、engine_id | 保存选定的进程名称或容器身份 |
 | `service_assets` | node_id、name、management、路径、仓库、verified_at | 人工登记和确认 |
 | `discovered_resources` | node_id、kind、resource_scope、resource_id、observed_at | Agent 观测的 Docker、systemd 和进程实例 |
 | `asset_bindings` | asset_id、discovery_id、node_id、bound_at | 同节点的人工绑定 |
 | `operation_jobs`、`operation_audit_events` | task_id、node_id、actor、action、state、执行时间和结果 | 保存确认和实际执行状态。取消以及重启中断可追溯 |
 | `alert_rules`、`alert_events` | node_id、metric、threshold、for_seconds、发生及恢复时间 | 保存节点告警规则和历史 |
+| `service_monitors`、`service_monitor_history`、`service_alert_events` | 节点、Unit、检查结果、状态变化、告警和结束原因 | 保存选定 Unit 的监控配置、历史与告警 |
 
 同名服务可在不同节点重复存在。通过节点、运行环境与实际资源身份组合定位实例。人工记录、观察信息和告警均保留各自时间。节点与资产的管理动作保留独立审计记录。容器环境变量、SSH 私钥和终端内容不进入中心数据库。
 
@@ -234,9 +237,9 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 | `POST /api/v1/auth/login`、`POST /api/v1/auth/logout` | 登录和注销 |
 | `GET /api/v1/me` | 获取当前管理员会话 |
 | `GET /api/v1/settings` | 查看采样间隔、保留天数及终端启用状态 |
-| `GET /api/v1/nodes`、`GET /api/v1/nodes/{nodeId}` | 分页列举节点或读取节点详情 |
+| `GET /api/v1/nodes`、`GET /api/v1/nodes/{nodeId}` | 分页列举节点或读取节点详情。列表可附带各节点的最新指标和全局状态统计 |
 | `POST /api/v1/nodes/enrollment-token` | 创建节点并签发一次性注册凭证 |
-| `PATCH /api/v1/nodes/{nodeId}` | 更新节点名称、类型、标签或备注 |
+| `PATCH /api/v1/nodes/{nodeId}` | 更新节点名称、类型、标签、备注或宿主机标识 |
 | `POST /api/v1/nodes/{nodeId}/enrollment-token` | 保持节点 ID 并换发注册凭证 |
 | `DELETE /api/v1/nodes/{nodeId}/credentials` | 吊销节点注册凭证和设备凭证 |
 | `DELETE /api/v1/nodes/{nodeId}` | 移除节点；存在关联服务资产时返回 409 |
@@ -252,9 +255,14 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 | --- | --- |
 | `GET /nodes/{id}/metrics?range=1h` | 读取 1 小时或 24 小时的原始样本，支持限制条数 |
 | `GET /nodes/{id}/processes`、`GET /nodes/{id}/processes/{pid}` | 进程快照和详情。列表支持名称/PID、排序、分页 |
-| `GET /nodes/{id}/docker/containers` | Engine 状态和容器清单 |
+| `GET /nodes/{id}/docker/containers` | Engine 状态和容器发现清单。接口支持搜索，发现窗口对结果分页 |
+| `GET /nodes/{id}/managed-resources/{kind}`、`POST /nodes/{id}/managed-resources/{kind}` | 分页查看或添加已纳管的进程或容器。类型为 `process` 或 `docker` |
+| `GET /nodes/{id}/managed-resources/{kind}/live`、`DELETE /nodes/{id}/managed-resources/{kind}/{resource}` | 查询当前页对象的实时状态或移除纳管记录 |
 | `GET /nodes/{id}/docker/containers/{container}/stats`、`GET /nodes/{id}/docker/containers/{container}/logs` | 指定完整容器 ID 的可用统计和有限日志 |
 | `GET /nodes/{id}/systemd/services`、`GET /nodes/{id}/systemd/services/{unit}` | Unit 清单和详情。清单支持 `q` 名称过滤 |
+| `GET /nodes/{id}/service-monitors` | 查看节点已配置的 Unit 监控与最近检查 |
+| `PUT /nodes/{id}/service-monitors/{unit}`、`DELETE /nodes/{id}/service-monitors/{unit}` | 开启或停用具体 Unit 的监控 |
+| `GET /nodes/{id}/service-monitors/{unit}/history` | 读取最近 50 条状态变化 |
 | `GET /nodes/{id}/discoveries` | 按类型列举已观察到的资源 |
 | `GET /assets`、`POST /assets` | 跨节点搜索与登记资产，支持名称、节点、运行方式和标签筛选 |
 | `GET /assets/{id}`、`PATCH /assets/{id}`、`DELETE /assets/{id}` | 查询、编辑和移除人工记录 |
@@ -274,7 +282,7 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 | `GET /nodes/{id}/terminal/capability`、`POST /nodes/{id}/terminal` | 查询终端启用状态与经口令复核后开启会话 |
 | `GET /terminal/{id}`、`POST /terminal/{id}/input`、`POST /terminal/{id}/resize`、`DELETE /terminal/{id}` | 分段读终端输出、写入、调整窗口和关闭 |
 | `GET /nodes/{id}/trends?range=7d` | 读取 7 天或 30 天的 5 分钟趋势 |
-| `GET /alerts` | 查看活动、已恢复告警 |
+| `GET /alerts` | 查看节点和指定服务的活动告警、已恢复告警或停用结束的服务告警 |
 | `GET /alert-rules`、`POST /alert-rules`、`PATCH /alert-rules/{id}`、`DELETE /alert-rules/{id}` | 查看、配置和移除节点告警规则 |
 
 ### 10.4 Agent 协议
@@ -322,7 +330,7 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 - Rust 单元测试：指标计算、速率计算、时间边界、状态机、参数校验、命令白名单。
 - 集成测试：SQLite 迁移、Agent 注册、吊销凭证、断线重连、Server/Agent 版本不兼容。
 - Docker 测试：Engine 缺失、Socket 拒绝、容器重启、容器退出、日志截断、Compose 标签缺失。
-- systemd 测试：服务运行/停止、无 systemd、权限不足、路径无法确定。
+- systemd 测试：服务运行、停止和恢复，以及 systemd 不可用、权限不足、路径无法确定。覆盖监控启停、未知状态和告警去重。
 - WSL 测试：WSL IP 变化、WSL 停止、恢复运行、Docker Desktop 与 WSL 独立 Engine 的差异。
 - 安全测试：未授权访问、跨节点访问、重复请求、过期令牌、命令注入、CSRF、审计泄露、超量输出。
 - Web E2E：节点切换、资产全局搜索、离线状态、缺测值、来源展示、录入/编辑资产。
@@ -372,7 +380,7 @@ M1 验收只读监控和资产管理。M2 和 M3 的远端变更需要按能力�
 
 1. Linux 用户/用户组/SSH 公钥只读与受控变更。
 2. Web 终端及强化授权。
-3. 告警、长期趋势和可配置保留周期。
+3. 告警、指定 systemd 服务持续监控、长期趋势和可配置保留周期。
 4. 按需设计 Windows Host Agent（只在真正需要 WSL 生命周期管理时引入）。
 
 ## 15. 技术决策记录（ADR）

@@ -7,7 +7,7 @@ import { alertMetric, type AlertRule, type Rules } from './data';
 
 export function AlertRulesPanel({ nodes, onExpired }: { nodes: Node[]; onExpired: () => void }) {
   const [offset, setOffset] = useState(0);
-  const pageSize = 50;
+  const pageSize = 12;
   const rules = useResource<Rules>('/alert-rules?limit=' + pageSize + '&offset=' + offset, onExpired);
   const [edit, setEdit] = useState<{ data?: AlertRule }>();
   const [removing, setRemoving] = useState<AlertRule>();

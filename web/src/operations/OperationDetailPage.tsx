@@ -5,9 +5,14 @@ import { useResource } from '../useResource';
 import { operationName, operationStates, operationTarget, type OperationDetail } from './data';
 
 const auditLabels: Record<string, string> = {
-  prepared: '创建确认', confirmed: '确认执行', queued: '加入队列', started: '开始执行', succeeded: '执行成功',
+  prepared: '创建确认', confirmed: '确认执行', queued: '加入队列', dispatched: '已下发', started: '开始执行', succeeded: '执行成功',
   failed: '执行失败', timed_out: '超时', cancelled: '取消', disconnected: '连接中断', expired: '确认过期',
   interrupted: '执行中断', cancel_requested: '请求取消',
+};
+
+const accountErrors: Record<string, string> = {
+  agent_account_conflict: '账号、家目录或公钥已存在，或授权文件已变化。请刷新后核对。',
+  agent_account_not_found: '节点上找不到所需的账号、目录或公钥。',
 };
 
 export function OperationDetailPage({ id, onExpired }: { id: string; onExpired: () => void }) {
@@ -17,7 +22,8 @@ export function OperationDetailPage({ id, onExpired }: { id: string; onExpired: 
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState('');
   const job = resource.data;
-  const cancellable = job != null && !resource.error && ['prepared', 'queued', 'running'].includes(job.state) && job.cancel_requested_at == null;
+  const cancellable = job?.can_cancel === true && !resource.error;
+  const accountError = job?.error_code ? accountErrors[job.error_code] : undefined;
 
   async function cancel() {
     setError('');
@@ -58,6 +64,7 @@ export function OperationDetailPage({ id, onExpired }: { id: string; onExpired: 
             {job.cancel_requested_at != null && <div><dt>请求取消时间</dt><dd><Timestamp value={job.cancel_requested_at} /></dd></div>}
             <div><dt>退出码</dt><dd>{job.exit_code ?? '—'}</dd></div>
             <div><dt>错误码</dt><dd className="technical">{job.error_code || '—'}</dd></div>
+            {accountError && <div><dt>失败原因</dt><dd>{accountError}</dd></div>}
           </dl>
           {cancellable && (
             <div className="actions">

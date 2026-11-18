@@ -492,3 +492,12 @@ dialog > .dialog-actions { margin-block-start: var(--space-5); }
 @media (min-width: 40.01rem) and (max-width: 60rem) {
   .detail-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+
+.monitor-picker { width: min(42rem, calc(100% - 2rem)); }
+.monitor-picker .section-bar h2 { margin: 0; }
+.monitor-picker .filter-bar { padding-inline: 0; background: none; border: 0; box-shadow: none; }
+.row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.row-actions button { white-space: nowrap; }
+.enrollment-guide summary { cursor: pointer; }
+.enrollment-guide pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.enrollment-guide li { margin-block: var(--space-2); }

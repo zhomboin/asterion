@@ -14,7 +14,9 @@ pub enum Completed {
 }
 
 pub struct Worker {
-    collector: Arc<Mutex<Collector>>,
+    query_collector: Arc<Mutex<Collector>>,
+    metrics_collector: Arc<Mutex<Collector>>,
+    metrics_permit: Arc<Semaphore>,
     permits: Arc<Semaphore>,
     executor: Arc<Executor>,
 }
@@ -22,17 +24,19 @@ pub struct Worker {
 impl Worker {
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
-            collector: Arc::new(Mutex::new(Collector::new())),
-            permits: Arc::new(Semaphore::new(2)),
+            query_collector: Arc::new(Mutex::new(Collector::new())),
+            metrics_collector: Arc::new(Mutex::new(Collector::new())),
+            metrics_permit: Arc::new(Semaphore::new(1)),
+            permits: Arc::new(Semaphore::new(4)),
             executor: Arc::new(Executor::from_env()?),
         })
     }
 
     pub fn sample(&self, jobs: &mut JoinSet<Completed>) -> bool {
-        let Ok(permit) = Arc::clone(&self.permits).try_acquire_owned() else {
+        let Ok(permit) = Arc::clone(&self.metrics_permit).try_acquire_owned() else {
             return false;
         };
-        let collector = Arc::clone(&self.collector);
+        let collector = Arc::clone(&self.metrics_collector);
         jobs.spawn(async move {
             let sample = spawn_blocking(move || {
                 let _permit = permit;
@@ -65,7 +69,7 @@ impl Worker {
             }));
         }
         let permit = Arc::clone(&self.permits).try_acquire_owned().ok()?;
-        let collector = Arc::clone(&self.collector);
+        let collector = Arc::clone(&self.query_collector);
         Some(jobs.spawn(async move {
             let TaskRequest {
                 request_id,

@@ -3,9 +3,9 @@ import type { NodePage } from '../api';
 import { DataTable, fraction, PageHeader, Pagination, Problem, Tabs, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { AlertRulesPanel } from './AlertRulesPanel';
-import { alertMetric, type Alerts } from './data';
+import { alertLabel, alertNodeHref, type Alerts } from './data';
 
-const pageSize = 50;
+const pageSize = 12;
 const views = [['events', '事件'], ['rules', '规则']] as const;
 
 export function AlertsPage({ onExpired }: { onExpired: () => void }) {
@@ -40,7 +40,7 @@ function AlertEvents({ nodes, onExpired }: { nodes: NodePage['nodes']; onExpired
     <section aria-label="告警事件">
       <form className="filter-bar" onSubmit={search}>
         <label>状态<select name="state" defaultValue={filters.state}>
-          <option value="active">进行中</option><option value="resolved">已恢复</option><option value="all">全部状态</option>
+          <option value="active">进行中</option><option value="resolved">已结束</option><option value="all">全部状态</option>
         </select></label>
         <label>节点<select name="node_id" defaultValue={filters.node_id}>
           <option value="">全部节点</option>
@@ -52,13 +52,21 @@ function AlertEvents({ nodes, onExpired }: { nodes: NodePage['nodes']; onExpired
       {alerts.error && <Problem error={alerts.error} retry={alerts.refresh} />}
       {alerts.data && alerts.data.alerts.length === 0 && <p className="empty">暂无匹配告警</p>}
       {Boolean(alerts.data?.alerts.length) && (
-        <DataTable label="告警事件" columns={['指标', '节点', '状态', '观测值 / 阈值', '触发时间', '恢复时间']}>
+        <DataTable label="告警事件" columns={['类型', '节点', '状态', '观测值 / 阈值', '触发时间', '结束时间']}>
           {alerts.data?.alerts.map((alert) => (
             <tr key={alert.id}>
-              <th scope="row">{alertMetric[alert.metric]}</th>
-              <td><a className="text-link" href={'/nodes/' + encodeURIComponent(alert.node_id)}>{alert.node_name}</a></td>
-              <td className="operation-state" data-state={alert.status === 'active' ? 'failed' : 'succeeded'}>{alert.status === 'active' ? '进行中' : '已恢复'}</td>
-              <td>{alert.metric === 'offline' ? '—' : fraction(alert.value) + ' / ' + fraction(alert.threshold)}</td>
+              <th scope="row">
+                {alertLabel(alert)}
+                {alert.unit && <p className="table-secondary technical">{alert.unit}</p>}
+              </th>
+              <td><a className="text-link" href={alertNodeHref(alert)}>{alert.node_name}</a></td>
+              <td
+                className="operation-state"
+                data-state={alert.status === 'active' ? 'failed' : alert.resolution === 'disabled' ? undefined : 'succeeded'}
+              >
+                {alert.status === 'active' ? '进行中' : alert.resolution === 'disabled' ? '监控已停用' : '已恢复'}
+              </td>
+              <td>{alert.metric === 'offline' || alert.metric === 'service' ? '—' : fraction(alert.value) + ' / ' + fraction(alert.threshold)}</td>
               <td><Timestamp value={alert.opened_at} /></td><td><Timestamp value={alert.resolved_at} /></td>
             </tr>
           ))}

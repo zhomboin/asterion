@@ -14,7 +14,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::{
     accounts, agent_bus::AgentBus, alerts, assets, auth, http_policy, monitor, nodes, operations,
-    settings, terminal, trends,
+    service_monitors, settings, terminal, trends,
 };
 
 #[derive(Serialize)]
@@ -28,6 +28,7 @@ pub fn router(
     shutdown: watch::Receiver<bool>,
     bus: Arc<AgentBus>,
 ) -> Router {
+    let terminals = Arc::new(terminal::TerminalHub::new(bus.terminal_enabled()));
     let mut router = Router::new()
         .route("/healthz", get(health))
         .merge(auth::routes())
@@ -35,11 +36,13 @@ pub fn router(
         .merge(monitor::routes())
         .merge(assets::routes())
         .merge(operations::routes())
-        .merge(terminal::routes(bus.terminal_enabled()))
+        .merge(terminal::routes())
         .merge(accounts::routes())
         .merge(alerts::routes())
         .merge(trends::routes())
+        .merge(service_monitors::routes())
         .merge(settings::routes())
+        .layer(Extension(terminals))
         .layer(Extension(bus))
         .layer(DefaultBodyLimit::max(16 * 1024))
         .with_state(pool);

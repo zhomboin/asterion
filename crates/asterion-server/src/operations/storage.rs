@@ -51,6 +51,7 @@ pub(super) struct List {
 pub(super) struct Detail {
     #[serde(flatten)]
     summary: Summary,
+    can_cancel: bool,
     output: Option<String>,
     truncated: bool,
     audit: Vec<AuditEntry>,
@@ -102,7 +103,7 @@ pub(super) async fn list(
 }
 
 pub(super) async fn get(
-    _: AdminSession,
+    session: AdminSession,
     State(pool): State<SqlitePool>,
     Path(id): Path<String>,
 ) -> Result<Json<Detail>, ApiError> {
@@ -117,9 +118,11 @@ pub(super) async fn get(
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(NOT_FOUND)?;
-    let (output, truncated) = sqlx::query_as::<_, (Option<String>, bool)>(
-        "SELECT output, truncated FROM operation_jobs WHERE id = ?",
+    let (output, truncated, same_session) = sqlx::query_as::<_, (Option<String>, bool, bool)>(
+        "SELECT output, truncated, actor = ? AND session_hash = ? FROM operation_jobs WHERE id = ?",
     )
+    .bind(&session.username)
+    .bind(session.binding().as_slice())
     .bind(&id)
     .fetch_one(&mut *tx)
     .await?;
@@ -130,8 +133,12 @@ pub(super) async fn get(
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
+    let can_cancel = same_session
+        && matches!(summary.state.as_str(), "prepared" | "queued" | "running")
+        && summary.cancel_requested_at.is_none();
     Ok(Json(Detail {
         summary,
+        can_cancel,
         output,
         truncated,
         audit,

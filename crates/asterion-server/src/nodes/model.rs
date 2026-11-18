@@ -1,11 +1,13 @@
 use asterion_protocol::{HEARTBEAT_TIMEOUT_SECS, NodeKind, is_node_id};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{FromRow, Sqlite, SqlitePool, Transaction};
 
 use super::error::ApiError;
 use crate::model::Node;
 
-const NODE_QUERY: &str = "SELECT n.*, CASE
+const NODE_QUERY: &str = "SELECT n.*,
+    (SELECT name FROM hosts WHERE id = n.host_id) AS host_name,
+    CASE
     WHEN n.last_seen_at IS NULL THEN 'pending'
     WHEN n.last_seen_at > unixepoch() - ? AND EXISTS (
         SELECT 1 FROM agent_credentials a WHERE a.node_id = n.id AND a.revoked_at IS NULL
@@ -17,6 +19,7 @@ const NODE_QUERY: &str = "SELECT n.*, CASE
 #[serde(deny_unknown_fields)]
 pub(super) struct NodeInput {
     pub name: String,
+    pub host_name: Option<String>,
     pub kind: NodeKind,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -28,6 +31,7 @@ impl NodeInput {
     pub fn validate(self) -> Result<Self, ApiError> {
         Ok(Self {
             name: validate_name(self.name)?,
+            host_name: self.host_name.map(validate_name).transpose()?,
             kind: self.kind,
             tags: validate_tags(self.tags)?,
             notes: validate_notes(self.notes)?,
@@ -39,6 +43,8 @@ impl NodeInput {
 #[serde(deny_unknown_fields)]
 pub(super) struct NodePatch {
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "nullable_name")]
+    pub host_name: Option<Option<String>>,
     pub kind: Option<NodeKind>,
     pub tags: Option<Vec<String>>,
     pub notes: Option<String>,
@@ -46,18 +52,32 @@ pub(super) struct NodePatch {
 
 impl NodePatch {
     pub fn validate(self) -> Result<Self, ApiError> {
-        if self.name.is_none() && self.kind.is_none() && self.tags.is_none() && self.notes.is_none()
+        if self.name.is_none()
+            && self.host_name.is_none()
+            && self.kind.is_none()
+            && self.tags.is_none()
+            && self.notes.is_none()
         {
             return Err(ApiError::INVALID_INPUT);
         }
 
         Ok(Self {
             name: self.name.map(validate_name).transpose()?,
+            host_name: self
+                .host_name
+                .map(|name| name.map(validate_name).transpose())
+                .transpose()?,
             kind: self.kind,
             tags: self.tags.map(validate_tags).transpose()?,
             notes: self.notes.map(validate_notes).transpose()?,
         })
     }
+}
+
+fn nullable_name<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::deserialize(deserializer).map(Some)
 }
 
 fn validate_name(value: String) -> Result<String, ApiError> {
@@ -120,19 +140,40 @@ pub(super) enum NodeStatus {
 pub(super) struct NodeView {
     #[serde(flatten)]
     node: Node,
+    host_name: Option<String>,
     status: NodeStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metrics: Option<NodeMetrics>,
+}
+
+#[derive(Serialize)]
+struct NodeMetrics {
+    observed_at: i64,
+    cpu_percent: Option<f64>,
+    memory_percent: Option<f64>,
+    disk_percent: Option<f64>,
 }
 
 #[derive(Serialize)]
 pub(super) struct NodeList {
     nodes: Vec<NodeView>,
     has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_counts: Option<NodeCounts>,
+}
+
+#[derive(FromRow, Serialize)]
+struct NodeCounts {
+    pending: i64,
+    online: i64,
+    offline: i64,
 }
 
 #[derive(FromRow)]
 struct NodeRow {
     id: String,
     host_id: Option<String>,
+    host_name: Option<String>,
     name: String,
     kind: String,
     tags: String,
@@ -174,7 +215,9 @@ impl TryFrom<NodeRow> for NodeView {
                 created_at: row.created_at,
                 updated_at: row.updated_at,
             },
+            host_name: row.host_name,
             status: row.status,
+            metrics: None,
         })
     }
 }
@@ -196,6 +239,35 @@ pub(super) struct NodeFilters {
     pub q: Option<String>,
     pub tag: Option<String>,
     pub status: Option<NodeStatus>,
+    pub with_metrics: bool,
+}
+
+#[derive(FromRow)]
+struct NodeListRow {
+    #[sqlx(flatten)]
+    node: NodeRow,
+    metric_observed_at: Option<i64>,
+    metric_sample: Option<String>,
+}
+
+impl TryFrom<NodeListRow> for NodeView {
+    type Error = ApiError;
+
+    fn try_from(row: NodeListRow) -> Result<Self, Self::Error> {
+        let mut view = Self::try_from(row.node)?;
+        if let Some((observed_at, sample)) = row.metric_observed_at.zip(row.metric_sample) {
+            let sample = serde_json::from_str(&sample)
+                .map_err(|_| ApiError::internal("node_metric_decode"))?;
+            let statistics = crate::trends::statistics(&sample);
+            view.metrics = Some(NodeMetrics {
+                observed_at,
+                cpu_percent: statistics.cpu,
+                memory_percent: statistics.memory,
+                disk_percent: statistics.disk,
+            });
+        }
+        Ok(view)
+    }
 }
 
 pub(super) async fn list(
@@ -205,27 +277,54 @@ pub(super) async fn list(
     filters: &NodeFilters,
 ) -> Result<NodeList, ApiError> {
     let sql = format!(
-        "WITH node_status AS ({NODE_QUERY})
-         SELECT * FROM node_status AS n
-         WHERE (?2 IS NULL OR instr(lower(n.name), lower(?2)) > 0 OR instr(n.id, lower(?2)) > 0)
-           AND (?3 IS NULL OR EXISTS (SELECT 1 FROM json_each(n.tags) AS t WHERE t.value = ?3))
-           AND (?4 IS NULL OR n.status = ?4)
-         ORDER BY n.created_at, n.id LIMIT ?5 OFFSET ?6"
+        "WITH node_status AS ({NODE_QUERY}), node_page AS (
+             SELECT * FROM node_status AS n
+             WHERE (?2 IS NULL OR instr(lower(n.name), lower(?2)) > 0 OR instr(n.id, lower(?2)) > 0)
+               AND (?3 IS NULL OR EXISTS (SELECT 1 FROM json_each(n.tags) AS t WHERE t.value = ?3))
+               AND (?4 IS NULL OR n.status = ?4)
+             ORDER BY n.created_at, n.id LIMIT ?5 OFFSET ?6
+         )
+         SELECT p.*, m.observed_at AS metric_observed_at, m.sample AS metric_sample
+         FROM node_page AS p
+         LEFT JOIN metric_samples AS m ON ?7 AND m.node_id = p.id AND m.observed_at = (
+             SELECT max(observed_at) FROM metric_samples
+             WHERE node_id = p.id AND observed_at <= unixepoch()
+         )
+         ORDER BY p.created_at, p.id"
     );
     let status = filters.status.as_ref().map(|status| match status {
         NodeStatus::Pending => "pending",
         NodeStatus::Online => "online",
         NodeStatus::Offline => "offline",
     });
-    let mut rows = sqlx::query_as::<_, NodeRow>(&sql)
+    let mut tx = pool.begin().await?;
+    let mut rows = sqlx::query_as::<_, NodeListRow>(&sql)
         .bind(HEARTBEAT_TIMEOUT_SECS as i64)
         .bind(filters.q.as_deref())
         .bind(filters.tag.as_deref())
         .bind(status)
         .bind(i64::from(limit) + 1)
         .bind(i64::from(offset))
-        .fetch_all(pool)
+        .bind(filters.with_metrics)
+        .fetch_all(&mut *tx)
         .await?;
+    let status_counts = if filters.with_metrics {
+        let counts_sql = format!(
+            "SELECT count(*) FILTER (WHERE status = 'pending') AS pending,
+                    count(*) FILTER (WHERE status = 'online') AS online,
+                    count(*) FILTER (WHERE status = 'offline') AS offline
+             FROM ({NODE_QUERY})"
+        );
+        Some(
+            sqlx::query_as(&counts_sql)
+                .bind(HEARTBEAT_TIMEOUT_SECS as i64)
+                .fetch_one(&mut *tx)
+                .await?,
+        )
+    } else {
+        None
+    };
+    tx.commit().await?;
     let has_more = rows.len() > usize::from(limit);
     rows.truncate(usize::from(limit));
     Ok(NodeList {
@@ -234,6 +333,7 @@ pub(super) async fn list(
             .map(NodeView::try_from)
             .collect::<Result<_, _>>()?,
         has_more,
+        status_counts,
     })
 }
 

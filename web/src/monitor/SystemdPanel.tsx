@@ -1,9 +1,13 @@
-import { useState, type FormEvent } from 'react';
-import { DataTable, Problem, Timestamp } from '../ui';
+import { useEffect, useRef, useState } from 'react';
+import { request, type Node } from '../api';
+import { Problem, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import type { Systemd, Unit } from './data';
 import { ServiceActions } from '../operations/ServiceActions';
 import type { NodeOperations } from '../operations/data';
+import { ServiceMonitorDetail, ServiceMonitorList, serviceMonitorRefreshMs } from './ServiceMonitoring';
+import { MonitorPicker } from './MonitorPicker';
+import type { ServiceMonitor } from './serviceMonitoring';
 
 const statusText = {
   available: '可用',
@@ -12,65 +16,92 @@ const statusText = {
   error: 'systemd 查询失败',
 };
 
-export function SystemdPanel({ base, onExpired, operations }: {
+const liveUnavailableText = {
+  online: undefined,
+  pending: 'Agent 尚未连接',
+  offline: 'Agent 离线',
+  unknown: '节点状态未更新',
+};
+
+export function SystemdPanel({ base, agentState, initialUnit, onExpired, operations }: {
   base: string;
+  agentState: Node['status'] | 'unknown';
+  initialUnit?: string;
   onExpired: () => void;
   operations?: NodeOperations;
 }) {
-  const [query, setQuery] = useState('');
-  const [selected, setSelected] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const [includeDisabled, setIncludeDisabled] = useState(false);
+  const [selected, setSelected] = useState(initialUnit);
+  const opener = useRef<HTMLButtonElement>(null);
+  const detailTitle = useRef<HTMLHeadingElement>(null);
+  const monitorListTitle = useRef<HTMLHeadingElement>(null);
+  const online = agentState === 'online';
   const path = base + '/systemd/services';
-  const inventory = useResource<Systemd>(query ? path + '?' + new URLSearchParams({ q: query }) : path, onExpired);
-  const detail = useResource<Unit>(selected ? path + '/' + encodeURIComponent(selected) : null, onExpired);
-  const systemd = inventory.data;
-  const rows = systemd?.units ?? [];
+  const detail = useResource<Unit>(online && selected ? path + '/' + encodeURIComponent(selected) : null, onExpired);
+  const monitorPath = base + '/service-monitors';
+  const monitors = useResource<{ monitors: ServiceMonitor[] }>(monitorPath, onExpired, serviceMonitorRefreshMs);
+  const monitor = monitors.data?.monitors.find((service) => service.unit === selected);
+  const exactUnit = detail.data?.verified && detail.data.name === selected;
+  const ready = Boolean(monitors.data && !monitors.error && (monitor || exactUnit));
+  const liveUnavailable = liveUnavailableText[agentState];
+  const unavailable = liveUnavailable ?? (monitors.error ? '监控状态未更新' : undefined);
 
-  function search(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setQuery(String(new FormData(event.currentTarget).get('query') ?? '').trim());
+  useEffect(() => {
+    if (selected) detailTitle.current?.focus();
+  }, [selected]);
+
+  function selectUnit(unit: string, action: HTMLButtonElement) {
+    opener.current = action;
+    if (selected === unit) detailTitle.current?.focus();
+    else setSelected(unit);
   }
 
   return (
     <section className="monitor-view" aria-label="systemd">
-      <div className="section-bar">
-        <h2>systemd</h2>
-        <button type="button" onClick={inventory.refresh}>刷新</button>
-      </div>
-      {(!systemd || systemd.status === 'available') && (
-        <form className="filter-bar operation-filters" onSubmit={search}>
-          <label>搜索 Unit<input name="query" type="search" placeholder="Unit 名称" maxLength={192} /></label>
-          <button type="submit">查询</button>
-        </form>
-      )}
-      {inventory.loading && <p role="status">正在读取 systemd 服务…</p>}
-      {inventory.error && <Problem error={inventory.error} retry={inventory.refresh} />}
-      {systemd && systemd.status !== 'available' && <p className="empty">{statusText[systemd.status]}</p>}
-      {systemd?.status === 'available' && (
-        <>
-
-          {systemd.truncated && <p className="observation">当前服务清单达到显示上限</p>}
-          {rows.length ? (
-            <DataTable label="systemd 服务列表" columns={['Unit', 'Active', 'Sub', '描述', '操作']}>
-              {rows.map((item) => (
-                <tr key={item.name}>
-                  <th scope="row" className="technical">{item.name}</th>
-                  <td>{item.active}</td><td>{item.sub}</td><td>{item.description || '—'}</td>
-                  <td><button type="button" className="quiet" aria-label={'查看 ' + item.name} onClick={() => setSelected(item.name)}>详情</button></td>
-                </tr>
-              ))}
-            </DataTable>
-          ) : <p className="empty">{query ? '没有匹配的 Unit' : '暂无服务 Unit'}</p>}
-        </>
-      )}
+      <section className="monitor-section" aria-labelledby="systemd-service-monitors-title">
+        <div className="section-bar">
+          <h2 id="systemd-service-monitors-title" tabIndex={-1} ref={monitorListTitle}>已纳管 systemd 服务</h2>
+          <div className="row-actions">
+            {monitors.data?.monitors.some((item) => !item.enabled) && <label>
+              <input type="checkbox" checked={includeDisabled} onChange={(event) => setIncludeDisabled(event.target.checked)} /> 显示已停用
+            </label>}
+            <button type="button" className="primary" disabled={!online} onClick={(event) => {
+              opener.current = event.currentTarget; setAdding(true);
+            }}>添加监控</button>
+          </div>
+        </div>
+        {!online && <p className="observation">{liveUnavailable}</p>}
+        {monitors.loading && <p role="status">正在读取监控服务…</p>}
+        {monitors.error && <Problem error={monitors.error} retry={monitors.refresh} />}
+        {monitors.data && <ServiceMonitorList
+          monitors={includeDisabled ? monitors.data.monitors : monitors.data.monitors.filter((item) => item.enabled)}
+          unavailable={unavailable}
+          onSelect={selectUnit}
+        />}
+      </section>
       {selected && (
         <section className="monitor-section detail-panel" aria-label="服务详情">
           <div className="section-bar">
-            <h2 className="technical">{selected}</h2>
-            <button type="button" className="quiet" onClick={() => setSelected(undefined)}>关闭</button>
+            <h2 className="technical" tabIndex={-1} ref={detailTitle}>{selected}</h2>
+            <button type="button" className="quiet" onClick={() => {
+              setSelected(undefined);
+              const focusTarget = opener.current?.isConnected ? opener.current : monitorListTitle.current;
+              focusTarget?.focus();
+            }}>关闭</button>
           </div>
           {detail.loading && <p role="status">正在读取 Unit 属性…</p>}
           {detail.error && <Problem error={detail.error} retry={detail.refresh} />}
           {detail.data && <UnitFacts unit={detail.data} />}
+          {(monitor || exactUnit) && <ServiceMonitorDetail
+            key={selected}
+            path={monitorPath + '/' + encodeURIComponent(selected)}
+            monitor={monitor}
+            ready={ready}
+            unavailable={unavailable}
+            onChanged={monitors.refresh}
+            onExpired={onExpired}
+          />}
           {detail.data && operations?.catalog.systemd_units.includes(selected) && (
             <ServiceActions title="systemd 运维" onChoose={(verb) => {
               operations.propose({ type: 'systemd', unit: selected, verb });
@@ -78,6 +109,18 @@ export function SystemdPanel({ base, onExpired, operations }: {
           )}
         </section>
       )}
+      {liveUnavailable && <p className="empty">{liveUnavailable}，实时查询暂不可用</p>}
+      {adding && online && <MonitorPicker<Systemd> title="添加 systemd 服务监控" placeholder="Unit 名称"
+        path={(q) => path + (q ? '?' + new URLSearchParams({ q }) : '')}
+        results={(data) => data.status !== 'available' ? { candidates: [], notice: statusText[data.status] } : ({
+          notice: data.truncated ? '候选清单达到上限，请按 Unit 名称缩小搜索范围' : undefined,
+          candidates: data.units.map((unit) => ({
+            id: unit.name, name: unit.name, description: unit.active + ' / ' + unit.sub,
+            disabled: monitors.data?.monitors.some((item) => item.unit === unit.name && item.enabled),
+            add: () => request(monitorPath + '/' + encodeURIComponent(unit.name), { method: 'PUT' }),
+          })),
+        })} onClose={() => setAdding(false)} onExpired={onExpired}
+        onAdded={(unit) => { setAdding(false); monitors.refresh(); setSelected(unit); }} />}
     </section>
   );
 }

@@ -5,6 +5,7 @@ use std::fs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::process_runtime::{Runtime, runtime_from_cgroups};
 use crate::system::{CpuTicks, cpu_ticks, read_proc};
 use crate::{CollectorError, read_file, redact, truncate_utf8};
 
@@ -25,6 +26,7 @@ struct Snapshot {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ListArgs {
     q: Option<String>,
+    names: Option<Vec<String>>,
     #[serde(default)]
     sort: Sort,
     limit: Option<usize>,
@@ -67,6 +69,7 @@ struct Detail {
     executable: Option<String>,
     parent_pid: Option<u32>,
     user: Option<String>,
+    runtime: Option<Runtime>,
 }
 
 struct ProcStat {
@@ -138,6 +141,14 @@ impl Sampler {
         let limit = args.limit.unwrap_or(MAX_LIST_SIZE);
         if !(1..=MAX_LIST_SIZE).contains(&limit)
             || args.offset > MAX_PROCESSES_SCAN
+            || (args.names.is_some() && (args.offset != 0 || limit > 13))
+            || args.names.as_ref().is_some_and(|names| {
+                names.is_empty()
+                    || names.len() > 12
+                    || names.iter().any(|name| {
+                        name.is_empty() || name.len() > 256 || name.chars().any(char::is_control)
+                    })
+            })
             || args.q.as_ref().is_some_and(|value| value.len() > 256)
         {
             return Err(CollectorError::INVALID);
@@ -168,6 +179,13 @@ impl Sampler {
             {
                 continue;
             }
+            if args
+                .names
+                .as_ref()
+                .is_some_and(|names| !names.contains(&stat.name))
+            {
+                continue;
+            }
             let cpu = self.previous.as_ref().and_then(|before| {
                 let &(start, ticks) = before.processes.get(&pid)?;
                 let system_delta = stats.cpu.total.checked_sub(before.system_ticks)?;
@@ -182,6 +200,15 @@ impl Sampler {
         }
         self.previous = Some(snapshot);
         processes.sort_by(|one, two| compare(one, two, args.sort));
+        if args.names.is_some() {
+            let mut counts = HashMap::new();
+            processes.retain(|process| {
+                let count = counts.entry(process.name.clone()).or_insert(0);
+                *count += 1;
+                *count <= limit
+            });
+            return serde_json::to_value(processes).map_err(|_| CollectorError::FAILED);
+        }
         let page: Vec<_> = processes
             .into_iter()
             .skip(args.offset)
@@ -204,6 +231,9 @@ impl Sampler {
         let user = read_file(format!("{path}/status"), 16 * 1024)
             .ok()
             .and_then(|contents| find_user(&String::from_utf8_lossy(&contents)));
+        let runtime = read_file(format!("{path}/cgroup"), 16 * 1024)
+            .ok()
+            .and_then(|contents| runtime_from_cgroups(std::str::from_utf8(&contents).ok()?));
         if stat.start_ticks != read_stat(pid)?.start_ticks {
             return Err(CollectorError::NOT_FOUND);
         }
@@ -213,6 +243,7 @@ impl Sampler {
             executable,
             parent_pid: Some(stat.parent_pid),
             user,
+            runtime,
         })
         .map_err(|_| CollectorError::FAILED)
     }

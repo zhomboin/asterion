@@ -1,12 +1,12 @@
 import { useState, type FormEvent } from 'react';
-import type { Node, NodePage } from './api';
+import type { Node, NodePage, NodeStatusCounts } from './api';
 import { NodeDialog } from './NodeDialog';
-import { Card, CallToAction, Meter, NodeStatus, PageHeader, Pagination, Problem, Timestamp, nodeStatusLabel, nodeStatuses } from './ui';
+import { Card, CallToAction, Meter, NodeStatus, PageHeader, Pagination, Problem, Timestamp, fraction, nodeStatusLabel, nodeStatuses } from './ui';
 import { useResource } from './useResource';
 import { OverviewAlerts } from './alerts/OverviewAlerts';
 
-const pageSize = 50;
-type Dialog = { node?: Node };
+const pageSize = 12;
+type Dialog = { node?: Node; connect?: boolean };
 const percent = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
 
 export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: () => void }) {
@@ -14,12 +14,10 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
   const [offset, setOffset] = useState(0);
   const [dialog, setDialog] = useState<Dialog>();
   const params = new URLSearchParams({ ...filters, limit: String(pageSize), offset: String(offset) });
+  if (!manage) params.set('metrics', 'true');
   const snapshot = useResource<NodePage>('/nodes?' + params, onExpired, 5_000);
   const page = snapshot.data;
   const nodes = page?.nodes ?? [];
-  const counts = { pending: 0, online: 0, offline: 0 };
-  for (const node of nodes) counts[node.status]++;
-  const partial = Boolean(offset || page?.has_more);
 
   function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -39,7 +37,7 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
       {page && nodes.length > 0 && (
         <ul className="node-list" aria-label="节点列表">
           {nodes.map((node) => (
-            <NodeRow key={node.id} node={node} manage={manage} onManage={() => setDialog({ node })} />
+            <NodeRow key={node.id} node={node} manage={manage} onManage={() => setDialog({ node })} onConnect={() => setDialog({ node, connect: true })} />
           ))}
         </ul>
       )}
@@ -51,8 +49,8 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
     <>
       <PageHeader
         title={manage ? '节点' : '总览'}
-        scope={manage ? '登记、筛选与管理受监控节点' : '节点健康、进行中告警与最近心跳'}
-        actions={<CallToAction icon="plus" onClick={() => setDialog({})}>登记节点</CallToAction>}
+        scope={manage ? '登记、筛选与管理受监控节点' : '节点健康、资源用量与进行中告警'}
+        actions={<CallToAction icon="plus" onClick={() => setDialog({})}>接入服务器</CallToAction>}
       />
       {manage && (
         <form className="filter-bar" onSubmit={search}>
@@ -69,7 +67,7 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
       {snapshot.loading && <p role="status" className="muted">正在加载节点…</p>}
       {manage ? list : (
         <div className="overview-grid">
-          {page && <HealthCard counts={counts} total={nodes.length} partial={partial} />}
+          {page?.status_counts && <HealthCard counts={page.status_counts} />}
           <OverviewAlerts onExpired={onExpired} />
           <Card className="overview-nodes" title="节点" actions={<a className="text-link" href="/nodes">管理节点</a>}>
             {list}
@@ -79,6 +77,7 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
       {dialog && (
         <NodeDialog
           node={dialog.node}
+          connect={dialog.connect}
           onClose={() => setDialog(undefined)}
           onUpdated={snapshot.refresh}
           onExpired={onExpired}
@@ -88,13 +87,14 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
   );
 }
 
-function HealthCard({ counts, total, partial }: { counts: Record<Node['status'], number>; total: number; partial: boolean }) {
+function HealthCard({ counts }: { counts: NodeStatusCounts }) {
+  const total = counts.pending + counts.online + counts.offline;
   const ratio = (count: number) => (total ? (count / total) * 100 : 0);
   return (
-    <Card className="health-card" title={partial ? '本页节点健康' : '节点健康'}>
+    <Card className="health-card" title="节点健康">
       <p className="figure">{percent.format(ratio(counts.online))}<small>%</small></p>
       <p className="muted">在线率 · 共 {total} 个节点</p>
-      <dl className="legend" aria-label={partial ? '本页节点状态' : '节点状态'}>
+      <dl className="legend" aria-label="节点状态">
         {nodeStatuses.map((status) => (
           <div key={status} data-status={status}>
             <dt><span className="dot" aria-hidden="true" />{nodeStatusLabel[status]}</dt>
@@ -109,7 +109,7 @@ function HealthCard({ counts, total, partial }: { counts: Record<Node['status'],
   );
 }
 
-function NodeRow({ node, manage, onManage }: { node: Node; manage: boolean; onManage: () => void }) {
+function NodeRow({ node, manage, onManage, onConnect }: { node: Node; manage: boolean; onManage: () => void; onConnect: () => void }) {
   const environment = node.kind === 'wsl' ? ['WSL', node.wsl_distro].filter(Boolean).join(' · ') : 'Linux';
 
   return (
@@ -117,6 +117,7 @@ function NodeRow({ node, manage, onManage }: { node: Node; manage: boolean; onMa
       <div className="node-identity">
         <h2><a className="text-link" href={'/nodes/' + encodeURIComponent(node.id)}>{node.name}</a></h2>
         <p>{environment}</p>
+        {node.host_name && <p>宿主机：{node.host_name}</p>}
         {node.tags.length > 0 && <ul className="tags" aria-label="标签">{node.tags.map((tag, index) => <li key={index}>{tag}</li>)}</ul>}
         {manage && node.notes && <p className="notes">{node.notes}</p>}
       </div>
@@ -125,8 +126,19 @@ function NodeRow({ node, manage, onManage }: { node: Node; manage: boolean; onMa
         <div><dt>最近心跳</dt><dd><Timestamp value={node.last_seen_at} /></dd></div>
         <div><dt>系统</dt><dd>{[node.os, node.arch].filter(Boolean).join(' · ') || '—'}</dd></div>
         <div><dt>Agent 版本</dt><dd>{node.agent_version ?? '—'}</dd></div>
+        {!manage && (
+          <>
+            <div><dt>CPU</dt><dd>{fraction(node.metrics?.cpu_percent ?? null)}</dd></div>
+            <div><dt>内存</dt><dd>{fraction(node.metrics?.memory_percent ?? null)}</dd></div>
+            <div><dt>磁盘</dt><dd>{fraction(node.metrics?.disk_percent ?? null)}</dd></div>
+            <div><dt>最近采样</dt><dd><Timestamp value={node.metrics?.observed_at ?? null} /></dd></div>
+          </>
+        )}
       </dl>
-      {manage && <button className="quiet" type="button" onClick={onManage} aria-label={'管理 ' + node.name}>管理</button>}
+      {manage && <div className="row-actions">
+        <button className="quiet" type="button" onClick={onConnect} aria-label={'Agent 接入 ' + node.name}>Agent 接入</button>
+        <button className="quiet" type="button" onClick={onManage} aria-label={'管理 ' + node.name}>管理</button>
+      </div>}
     </li>
   );
 }

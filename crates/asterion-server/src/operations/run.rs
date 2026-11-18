@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use asterion_protocol::operation::OperationTask;
+use asterion_protocol::operation::{OperationAction, OperationTask};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::{SqliteConnection, SqlitePool};
@@ -19,6 +19,7 @@ pub(super) async fn execute(
     task: OperationTask,
 ) {
     let id = task.task_id.clone();
+    let account_change = matches!(task.action, OperationAction::Account { .. });
     let finished = match dispatch(&pool, &bus, &node, task).await {
         Ok(Some(Ok(pending))) => {
             let result = wait_with_progress(&pool, &id, pending).await;
@@ -27,10 +28,10 @@ pub(super) async fn execute(
             }
             match result {
                 Ok(output) => Outcome::from_output(output),
-                Err(error) => Outcome::from_error(error),
+                Err(error) => Outcome::from_error(error, account_change),
             }
         }
-        Ok(Some(Err(error))) => Outcome::from_error(error),
+        Ok(Some(Err(error))) => Outcome::from_error(error, account_change),
         Ok(None) => return,
         Err(_) => {
             let _ = bus.cancel(&node, &id);
@@ -171,7 +172,7 @@ impl Outcome {
         }
     }
 
-    fn from_error(error: BusError) -> Self {
+    fn from_error(error: BusError, account_change: bool) -> Self {
         match error {
             BusError::Timeout => Self::with_error("timed_out", "agent_timeout"),
             BusError::Offline => Self::with_error("disconnected", "agent_offline"),
@@ -185,6 +186,12 @@ impl Outcome {
                 }
                 "target_changed" | "target_mismatch" => {
                     Self::with_error("failed", "agent_target_changed")
+                }
+                "conflict" if account_change => {
+                    Self::with_error("failed", "agent_account_conflict")
+                }
+                "not_found" if account_change => {
+                    Self::with_error("failed", "agent_account_not_found")
                 }
                 _ => Self::with_error("failed", "agent_operation_rejected"),
             },
@@ -239,10 +246,31 @@ async fn finish_in_transaction(
 
 #[cfg(test)]
 mod tests {
-    use asterion_protocol::{AgentReply, TaskProgress, operation::OperationAction};
+    use asterion_protocol::{AgentReply, TaskProgress};
 
     use super::*;
     use crate::agent_bus::Control;
+
+    #[test]
+    fn account_rejections_preserve_safe_error_codes() {
+        for (code, expected) in [
+            ("conflict", "agent_account_conflict"),
+            ("not_found", "agent_account_not_found"),
+        ] {
+            let rejection = || BusError::Rejected {
+                code: code.into(),
+                message: "agent detail".into(),
+            };
+            let account = Outcome::from_error(rejection(), true);
+            assert_eq!(account.state, "failed");
+            assert_eq!(account.error_code, Some(expected));
+            assert!(account.output.is_none());
+            assert_eq!(
+                Outcome::from_error(rejection(), false).error_code,
+                Some("agent_operation_rejected")
+            );
+        }
+    }
 
     #[tokio::test]
     async fn live_output_remains_available_if_the_agent_times_out() {
