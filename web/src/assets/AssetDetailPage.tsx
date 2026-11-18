@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { errorMessage, isUnauthorized, request } from '../api';
-import { Problem, Timestamp } from '../ui';
+import { PageHeader, Problem, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { AssetForm } from './AssetForm';
 import { AssetBindings } from './AssetBindings';
@@ -31,20 +31,21 @@ export function AssetDetailPage({ id, onExpired }: { id: string; onExpired: () =
 
   return (
     <>
-      <a className="text-link back-link" href="/assets">服务资产</a>
+      {!data && <PageHeader back={{ href: '/assets', label: '服务资产' }} title="资产详情" />}
       {asset.loading && <p role="status">正在读取资产…</p>}
       {asset.error && <Problem error={asset.error} retry={asset.refresh} />}
       {data && (
         <>
-          <div className="page-heading">
-            <h1>{data.name}</h1>
-            {!editing && !removing && (
-              <div className="actions">
+          <PageHeader
+            back={{ href: '/assets', label: '服务资产' }}
+            title={data.name}
+            actions={!editing && !removing && (
+              <>
                 <button type="button" onClick={() => setEditing(true)}>编辑</button>
                 <button type="button" className="danger quiet" onClick={() => setRemoving(true)}>删除资产</button>
-              </div>
+              </>
             )}
-          </div>
+          />
           {editing ? (
             <AssetForm asset={data} onExpired={onExpired} onCancel={() => setEditing(false)} onSaved={() => {
               setEditing(false);

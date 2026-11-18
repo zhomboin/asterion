@@ -1,0 +1,138 @@
+/*
+ * 页面级样式：仅做排版组合，颜色/圆角/阴影一律引用 tokens.css。
+ */
+
+/* ---------- 总览 Overview ---------- */
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.health-card { grid-column: span 5; }
+.alerts-card { grid-column: span 7; }
+.overview-nodes { grid-column: 1 / -1; }
+.overview-grid > .alerts-card:first-child { grid-column: 1 / -1; }
+
+.health-card .figure { margin-block-end: var(--space-1); }
+
+.legend { display: grid; gap: var(--space-3); margin: var(--space-6) 0 0; }
+.legend > div { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); align-items: center; gap: var(--space-3); }
+.legend dt { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-2); font-size: var(--text-sm); }
+.legend dd { display: flex; align-items: center; gap: var(--space-3); margin: 0; }
+.legend-value { min-width: 2ch; color: var(--ink); font-size: var(--text-sm); font-weight: 600; font-variant-numeric: tabular-nums; text-align: end; }
+
+.alerts-card { display: flex; flex-direction: column; gap: var(--space-3); }
+.alerts-card .card-header { margin: 0; }
+.alert-list { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.alert-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--line-inverse);
+}
+.alert-list .dot { color: var(--offline); }
+.alert-list .muted { margin-inline-start: auto; font-size: var(--text-sm); }
+
+/* ---------- 节点列表 Node list ---------- */
+.node-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+
+.node-row {
+  display: grid;
+  grid-template-columns: minmax(11rem, 1fr) minmax(0, 2.3fr) auto;
+  align-items: center;
+  gap: var(--space-4) var(--space-6);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--frame-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-xs);
+  overflow-wrap: anywhere;
+  transition: box-shadow var(--duration) var(--ease), transform var(--duration) var(--ease);
+}
+
+.node-row:hover { box-shadow: var(--shadow-sm); }
+.node-identity h2 { font-size: var(--text-md); }
+.node-identity h2 .text-link { text-decoration: none; font-weight: 600; }
+.node-identity h2 .text-link:hover { text-decoration: underline; }
+.node-identity p { margin-block-start: var(--space-1); color: var(--muted); font-size: var(--text-sm); }
+.node-identity .notes { white-space: pre-wrap; }
+
+.node-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); margin: 0; }
+.node-meta dt { color: var(--muted); font-size: var(--text-xs); }
+.node-meta dd { margin: var(--space-1) 0 0; font-size: var(--text-sm); font-weight: 500; }
+
+/* ---------- 趋势图 Trend ---------- */
+.trend {
+  --track: var(--ink);
+  margin: 0 0 var(--space-4);
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  border: 1px solid var(--frame-border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+}
+
+.trend-caption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.trend-caption ul { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; padding: 0; list-style: none; color: var(--ink-2); font-size: var(--text-sm); }
+.trend-key { display: inline-block; width: .55rem; height: .55rem; margin-inline-end: var(--space-2); border-radius: 50%; background: var(--track); vertical-align: .05em; }
+.trend .cpu { --track: var(--gray-900); }
+.trend .memory { --track: var(--gray-500); }
+.trend .disk { --track: var(--gray-400); }
+.trend-track.disk polyline { stroke-dasharray: 5 3; }
+.trend svg { width: 100%; margin-block-start: var(--space-3); }
+.trend-grid { stroke: var(--line); stroke-width: 1px; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
+.trend-axis { fill: var(--muted); font-size: 9px; }
+.trend-track circle { fill: var(--track); }
+.trend-track polyline { fill: none; stroke: var(--track); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+
+/* ---------- 账号 / 资产 ---------- */
+.group-options legend { padding-inline: var(--space-1); color: var(--ink-2); font-size: var(--text-sm); font-weight: 500; }
+.asset-form { margin-block-end: var(--space-5); }
+
+/* ---------- 运维 Operations ---------- */
+.operation-dialog { width: min(40rem, calc(100% - 2rem)); }
+.operation-filters { max-width: 32rem; }
+.service-actions { margin-block-start: var(--space-4); }
+
+/* ---------- 终端 Terminal ---------- */
+.terminal-login { max-width: 28rem; }
+.terminal-display { position: relative; }
+.terminal-screen, .terminal-probe { font: .875rem / 1.45 var(--font-mono); }
+.terminal-screen {
+  height: clamp(18rem, 54vh, 36rem);
+  margin: 0;
+  padding: var(--space-4);
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  background: var(--inverse);
+  box-shadow: var(--shadow-md);
+  color: var(--on-inverse);
+  white-space: pre;
+}
+.terminal-row { display: block; }
+.terminal-probe { position: absolute; visibility: hidden; white-space: pre; }
+.terminal-cursor { background: var(--on-inverse); color: var(--inverse); }
+.terminal-input { display: grid; gap: var(--space-2); margin-block: var(--space-3); font-size: var(--text-sm); }
+.terminal-input textarea { font: .9375rem var(--font-mono); }
+.terminal-paste { margin-block-start: var(--space-4); }
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 64rem) {
+  .health-card, .alerts-card { grid-column: 1 / -1; }
+}
+
+@media (max-width: 52rem) {
+  .node-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .node-meta { grid-column: 1 / -1; grid-row: 2; }
+}
+
+@media (max-width: 40rem) {
+  .node-row { padding: var(--space-4); }
+  .node-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trend { padding: var(--space-4) var(--space-3) var(--space-2); }
+  .trend svg { height: clamp(7.2rem, 35vw, 8.5rem); }
+}

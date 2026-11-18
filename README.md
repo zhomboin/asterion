@@ -5,6 +5,7 @@ Asterion 是面向个人和小型基础设施的自托管监控与运维平台�
 - [本地开发与验证](docs/development.md)
 - [远程部署、备份与恢复](docs/deployment.md)
 - [采集与运维配置](docs/monitoring-and-operations.md)
+- [前端设计规范](docs/design-system.md)
 - [产品需求](docs/Asterion-REQUIREMENTS.md)
 - [项目进度](docs/progress.md)
 - [版本记录](docs/version.md)

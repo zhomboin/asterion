@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Node } from '../api';
-import { NodeStatus, Problem, Timestamp } from '../ui';
+import { NodeStatus, PageHeader, Problem, Tabs, Timestamp } from '../ui';
 import { useResource } from '../useResource';
 import { MetricsPanel } from './MetricsPanel';
 import { ProcessesPanel } from './ProcessesPanel';
@@ -43,43 +43,35 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
   const hasCommands = Boolean(operations?.catalog.commands.length);
   const activeTab = (tab === 'command' && !hasCommands) || (tab === 'terminal' && !hasTerminal) ? 'metrics' : tab;
 
+  const tabItems: (readonly [Tab, string])[] = [
+    ...tabs,
+    ...(hasCommands ? [['command', '预定义命令'] as const] : []),
+    ...(hasTerminal ? [['terminal', '终端'] as const] : []),
+  ];
+
   return (
     <>
-      <a className="text-link back-link" href="/nodes">节点列表</a>
+      {!data && <PageHeader back={{ href: '/nodes', label: '节点列表' }} title="节点详情" />}
       {node.loading && <p role="status">正在加载节点…</p>}
       {node.error && <Problem error={node.error} retry={node.refresh} />}
       {data && (
         <>
-          <div className="page-heading">
-            <div>
-              <h1>{data.name}</h1>
-              <p className="page-scope">
-                {data.kind === 'wsl' ? '监控范围 · WSL' : '监控范围 · Linux'}
-                {data.wsl_distro && ' · ' + data.wsl_distro}
-              </p>
-            </div>
-            <div className="actions">
+          <PageHeader
+            back={{ href: '/nodes', label: '节点列表' }}
+            title={data.name}
+            scope={<>{data.kind === 'wsl' ? '监控范围 · WSL' : '监控范围 · Linux'}{data.wsl_distro && ' · ' + data.wsl_distro}</>}
+            actions={<>
               {operations && <a className="text-link" href={'/operations?node_id=' + encodeURIComponent(id)}>任务记录</a>}
               <NodeStatus node={data} />
-            </div>
-          </div>
+            </>}
+          />
           <dl className="detail-facts node-facts">
             <div><dt>系统</dt><dd>{[data.os, data.arch].filter(Boolean).join(' · ') || '—'}</dd></div>
             <div><dt>Agent 版本</dt><dd>{data.agent_version ?? '—'}</dd></div>
             <div><dt>最近心跳</dt><dd><Timestamp value={data.last_seen_at} /></dd></div>
             <div><dt>节点 ID</dt><dd className="technical">{data.id}</dd></div>
           </dl>
-          <nav className="tabs" aria-label="节点监控视图">
-            {tabs.map(([key, label]) => (
-              <button key={key} type="button" aria-pressed={activeTab === key} onClick={() => setTab(key)}>{label}</button>
-            ))}
-            {hasCommands && (
-              <button type="button" aria-pressed={activeTab === 'command'} onClick={() => setTab('command')}>预定义命令</button>
-            )}
-            {hasTerminal && (
-              <button type="button" aria-pressed={activeTab === 'terminal'} onClick={() => setTab('terminal')}>终端</button>
-            )}
-          </nav>
+          <Tabs label="节点监控视图" items={tabItems} value={activeTab} onChange={setTab} />
           {activeTab === 'metrics' && <MetricsPanel base={base} onExpired={onExpired} />}
           {activeTab !== 'metrics' && data.status !== 'online' && (
             <p className="empty">{data.status === 'pending' ? 'Agent 尚未连接' : 'Agent 离线，实时查询暂不可用'}</p>

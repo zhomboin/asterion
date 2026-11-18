@@ -9,11 +9,12 @@ import { OperationDetailPage } from './operations/OperationDetailPage';
 import { OperationsPage } from './operations/OperationsPage';
 import { AlertsPage } from './alerts/AlertsPage';
 import { SettingsPage } from './SettingsPage';
+import { Avatar, Brand, Icon, IconButton, type IconName } from './ui';
 
 type Auth =
   | { state: 'loading' }
   | { state: 'anonymous' }
-  | { state: 'authenticated'; session: Session }
+  | { state: 'authenticated'; session: Session; sessionVerified: boolean }
   | { state: 'failed'; message: string };
 
 type Destination =
@@ -68,7 +69,7 @@ export function App() {
         const session = await request<Session>('/me', { signal: controller.signal });
         if (controller.signal.aborted) return;
         replacePath(currentDestination());
-        setAuth({ state: 'authenticated', session });
+        setAuth({ state: 'authenticated', session, sessionVerified: true });
       } catch (error) {
         if (controller.signal.aborted) return;
         if (isUnauthorized(error)) expire();
@@ -85,13 +86,23 @@ export function App() {
     const controller = new AbortController();
     let checking = false;
 
+    function reportSessionCheck(sessionVerified: boolean) {
+      if (controller.signal.aborted) return;
+      setAuth((current) => current.state === 'authenticated' && current.sessionVerified !== sessionVerified
+        ? { ...current, sessionVerified }
+        : current);
+    }
+
     async function checkSession() {
       if (checking || document.hidden) return;
       checking = true;
       try {
         await request<Session>('/me', { signal: controller.signal });
+        reportSessionCheck(true);
       } catch (failure) {
-        if (!controller.signal.aborted && isUnauthorized(failure)) expire();
+        if (controller.signal.aborted) return;
+        if (isUnauthorized(failure)) expire();
+        else reportSessionCheck(false);
       } finally {
         checking = false;
       }
@@ -116,7 +127,7 @@ export function App() {
 
   function signedIn(session: Session) {
     replacePath(returnTo.current);
-    setAuth({ state: 'authenticated', session });
+    setAuth({ state: 'authenticated', session, sessionVerified: true });
   }
 
   async function logout() {
@@ -139,47 +150,72 @@ export function App() {
   }
 
   const active = destination(window.location.pathname) ?? { page: 'overview' };
-  const nodeSection = active.page === 'nodes' || active.page === 'node';
-  const assetSection = active.page === 'assets' || active.page === 'asset';
-  const operationsSection = active.page === 'operations' || active.page === 'operation';
 
-  return (
-    <>
-      <header className="site-header">
-        <div className="shell topbar">
-          <a className="wordmark" href="/overview">Asterion</a>
-          {auth.state === 'authenticated' && (
+  if (auth.state === 'anonymous') return <Login onSignIn={signedIn} />;
+  if (auth.state !== 'authenticated') {
+    return (
+      <main className="stage">
+        <div className="stage-card">
+          <Brand />
+          {auth.state === 'loading' && <p role="status" className="muted">正在连接中心…</p>}
+          {auth.state === 'failed' && (
             <>
-              <nav aria-label="主导航">
-                <a href="/overview" aria-current={active.page === 'overview' ? 'page' : undefined}>总览</a>
-                <a href="/nodes" aria-current={nodeSection ? 'page' : undefined}>节点</a>
-                <a href="/assets" aria-current={assetSection ? 'page' : undefined}>资产</a>
-                <a href="/operations" aria-current={operationsSection ? 'page' : undefined}>运维</a>
-                <a href="/alerts" aria-current={active.page === 'alerts' ? 'page' : undefined}>告警</a>
-                <a href="/settings" aria-current={active.page === 'settings' ? 'page' : undefined}>设置</a>
-              </nav>
-              <div className="account">
-                <span>{auth.session.username}</span>
-                <button className="quiet" type="button" disabled={loggingOut} onClick={logout}>退出</button>
-              </div>
+              <p role="alert">{auth.message}</p>
+              <button type="button" className="primary" onClick={() => {
+                setAuth({ state: 'loading' });
+                setAttempt((count) => count + 1);
+              }}>重试</button>
             </>
           )}
         </div>
-      </header>
-      {auth.state === 'loading' && <main className="shell blank"><p role="status">正在连接中心…</p></main>}
-      {auth.state === 'failed' && (
-        <main className="shell blank">
-          <p role="alert">{auth.message}</p>
-          <button type="button" onClick={() => {
-            setAuth({ state: 'loading' });
-            setAttempt((count) => count + 1);
-          }}>重试</button>
-        </main>
-      )}
-      {auth.state === 'anonymous' && <Login onSignIn={signedIn} />}
-      {auth.state === 'authenticated' && (
-        <main className="shell dashboard">
-          {logoutError && <p className="error" role="alert">{logoutError}</p>}
+      </main>
+    );
+  }
+
+  const username = auth.session.username;
+  return (
+    <div className="app-frame">
+      <aside className="sidebar">
+        <Brand />
+        <nav className="side-nav" aria-label="主导航">
+          {navigation.map(({ href, label, icon, pages }) => (
+            <a key={href} href={href} title={label} aria-current={pages.includes(active.page) ? 'page' : undefined}>
+              <Icon name={icon} />
+              <span className="nav-label">{label}</span>
+            </a>
+          ))}
+        </nav>
+        <div className="user-card">
+          <Avatar name={username} size="lg" />
+          <div className="user-meta">
+            <strong>{username}</strong>
+            <span>管理员</span>
+          </div>
+          <IconButton icon="logout" label="退出登录" disabled={loggingOut} onClick={logout} />
+        </div>
+      </aside>
+      <div className="workspace">
+        <header className="topbar">
+          <span className="top-pill">
+            <span className="top-pill-icon"><Icon name="calendar" size={16} /></span>
+            <span>{today.format(new Date())}</span>
+          </span>
+          <span className="top-pill">
+            <span className="top-pill-icon" data-tone="light" data-status={auth.sessionVerified ? 'online' : 'pending'}>
+              <Icon name="pulse" size={16} />
+            </span>
+            <span className="top-pill-text" role="status">
+              <strong>{auth.sessionVerified ? '中心在线' : '会话校验失败'}</strong>
+              <small>每 30 秒校验会话</small>
+            </span>
+          </span>
+          <span className="topbar-spacer" />
+          <a className="icon-button" data-tone="inverse" href="/alerts" aria-label="查看告警" title="查看告警">
+            <Icon name="alerts" />
+          </a>
+        </header>
+        <main className="dashboard">
+          {logoutError && <p className="notice" role="alert">{logoutError}</p>}
           {(active.page === 'overview' || active.page === 'nodes') && <NodesPage manage={active.page === 'nodes'} onExpired={expire} />}
           {active.page === 'node' && <NodeDetailPage id={active.id} onExpired={expire} />}
           {active.page === 'assets' && <AssetListPage onExpired={expire} />}
@@ -187,9 +223,20 @@ export function App() {
           {active.page === 'operations' && <OperationsPage onExpired={expire} />}
           {active.page === 'operation' && <OperationDetailPage id={active.id} onExpired={expire} />}
           {active.page === 'alerts' && <AlertsPage onExpired={expire} />}
-          {active.page === 'settings' && <SettingsPage username={auth.session.username} onExpired={expire} />}
+          {active.page === 'settings' && <SettingsPage username={username} onExpired={expire} />}
         </main>
-      )}
-    </>
+      </div>
+    </div>
   );
 }
+
+const today = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' });
+
+const navigation: { href: string; label: string; icon: IconName; pages: Destination['page'][] }[] = [
+  { href: '/overview', label: '总览', icon: 'overview', pages: ['overview'] },
+  { href: '/nodes', label: '节点', icon: 'nodes', pages: ['nodes', 'node'] },
+  { href: '/assets', label: '资产', icon: 'assets', pages: ['assets', 'asset'] },
+  { href: '/operations', label: '运维', icon: 'operations', pages: ['operations', 'operation'] },
+  { href: '/alerts', label: '告警', icon: 'alerts', pages: ['alerts'] },
+  { href: '/settings', label: '设置', icon: 'settings', pages: ['settings'] },
+];
