@@ -1,0 +1,9 @@
+{
+  "engine_socket": "/var/run/docker.sock",
+  "targets": [
+    {
+      "engine_id": "<Docker Engine ID>",
+      "container_ids": ["<64 位 Docker 容器 ID>"]
+    }
+  ]
+}

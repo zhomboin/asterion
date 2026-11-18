@@ -1,0 +1,26 @@
+[Unit]
+Description=Asterion Server
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=asterion
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/asterion
+EnvironmentFile=/etc/asterion/server.env
+LoadCredential=tls.crt:/etc/asterion/tls.crt
+LoadCredential=tls.key:/etc/asterion/tls.key
+Environment=ASTERION_TLS_CERT_FILE=%d/tls.crt
+Environment=ASTERION_TLS_KEY_FILE=%d/tls.key
+ExecStart=/opt/asterion/current/bin/asterion-server
+Restart=on-failure
+RestartSec=3s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

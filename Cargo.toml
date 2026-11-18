@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "crates/asterion-agent",
+    "crates/asterion-collector",
+    "crates/asterion-executor",
+    "crates/asterion-protocol",
+    "crates/asterion-server",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+asterion-protocol = { path = "crates/asterion-protocol" }
+serde = { version = "1", features = ["derive"] }

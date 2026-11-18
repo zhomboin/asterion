@@ -1,0 +1,21 @@
+.terminal-login { max-width: 27rem; }
+.terminal-display { position: relative; }
+.terminal-screen, .terminal-probe {
+  font: .9rem / 1.4 Consolas, 'Liberation Mono', monospace;
+}
+.terminal-screen {
+  height: clamp(18rem, 54vh, 36rem);
+  margin: 0;
+  padding: .75rem;
+  background: #17272f;
+  color: #edf5f7;
+  overflow: auto;
+  white-space: pre;
+  border-radius: .35rem;
+}
+.terminal-row { display: block; }
+.terminal-probe { visibility: hidden; white-space: pre; position: absolute; }
+.terminal-cursor { color: #17272f; background: #dcebf1; }
+.terminal-input { display: grid; margin-block: .7rem; gap: .4rem; font-size: .9rem; }
+.terminal-input textarea { font: .96rem Consolas, 'Liberation Mono', monospace; }
+.terminal-paste { margin-block-start: .8rem; }

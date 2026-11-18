@@ -1,0 +1,23 @@
+[Unit]
+Description=Asterion Docker read gateway
+
+[Service]
+Type=simple
+User=asterion-docker
+Group=asterion-readers
+SupplementaryGroups=docker
+RuntimeDirectory=asterion-docker-reader
+RuntimeDirectoryMode=0750
+Environment=ASTERION_DOCKER_READER_SOCKET=/run/asterion-docker-reader/requests.sock
+Environment=ASTERION_DOCKER_ENGINE_SOCKET=/var/run/docker.sock
+ExecStart=/opt/asterion-agent/current/bin/asterion-docker-reader
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

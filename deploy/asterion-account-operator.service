@@ -1,0 +1,25 @@
+[Unit]
+Description=Asterion allowlisted local account gateway
+
+[Service]
+Type=simple
+User=root
+Group=asterion-account-access
+RuntimeDirectory=asterion-account-operator
+RuntimeDirectoryMode=0750
+StateDirectory=asterion-account-operator
+StateDirectoryMode=0700
+Environment=ASTERION_ACCOUNT_OPERATOR_SOCKET=/run/asterion-account-operator/requests.sock
+Environment=ASTERION_ACCOUNT_OPERATOR_CONFIG_FILE=/etc/asterion-agent/account-operator.json
+ExecStart=/opt/asterion-agent/current/bin/asterion-account-operator
+Restart=on-failure
+RestartSec=3s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/etc /home -/var/log -/var/mail -/var/spool/mail
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
