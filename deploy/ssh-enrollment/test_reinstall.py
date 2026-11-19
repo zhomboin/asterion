@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -22,9 +23,9 @@ class ReinstallTests(unittest.TestCase):
         (self.app / "current").symlink_to(self.original)
         self.node = "ab" * 16
         self.identity = root / "identity.json"
-        self.identity.write_text('{"node_id":"' + self.node + '"}')
-        center = "https://center.example.invalid"
-        (root / "agent.env").write_text("ASTERION_SERVER_URL=" + center + "\n")
+        endpoint = "wss://center.example.invalid/api/v1/agent/connect"
+        self.identity.write_text(json.dumps({"node_id": self.node, "endpoint": endpoint}))
+        center = "https://center.example.invalid:443"
         self.binary = b"new agent"
         digest = hashlib.sha256(self.binary).hexdigest()
         with patch.multiple(bootstrap, APP=str(self.app), STATE=str(root), CONF=str(root)):
@@ -62,8 +63,11 @@ class ReinstallTests(unittest.TestCase):
         self.assertNotEqual(self.deploy(b"partial"), 0)
         self.env["FAIL_RESTART"] = "yes"
         self.assertNotEqual(self.deploy(), 0)
-        self.identity.write_text('{"node_id":"' + "00" * 16 + '"}')
+        identity = json.loads(self.identity.read_text())
+        self.identity.write_text(json.dumps(dict(identity, node_id="00" * 16)))
         self.env.pop("FAIL_RESTART")
+        self.assertNotEqual(self.deploy(), 0)
+        self.identity.write_text(json.dumps(dict(identity, endpoint="wss://other.example.invalid/api/v1/agent/connect")))
         self.assertNotEqual(self.deploy(), 0)
         self.assertEqual(list(self.original.parent.iterdir()), [self.original])
         self.assertEqual(self.agent.read_bytes(), b"original")

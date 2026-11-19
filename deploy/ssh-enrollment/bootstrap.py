@@ -112,9 +112,14 @@ def steps(center, ca, checksum):
 def reinstall_steps(center, ca, checksum, node_id):
     require(re.fullmatch(r"[0-9a-f]{32}", node_id), "节点 ID 无效")
     initial = steps(center, ca, checksum)
+    address = urlsplit(center)
+    host = f"[{address.hostname}]" if ":" in address.hostname else address.hostname
+    authority = host if address.port in (None, 443) else f"{host}:{address.port}"
+    endpoint = f"wss://{authority}/api/v1/agent/connect"
+    endpoint_pattern = shlex.quote(f'''"endpoint"[[:space:]]*:[[:space:]]*"{re.escape(endpoint)}"''')
     identity = (f"""test -f {STATE}/identity.json && test ! -L {STATE}/identity.json && """
                 f"""grep -Eq '"node_id"[[:space:]]*:[[:space:]]*"{node_id}"' {STATE}/identity.json && """
-                f"grep -Fxq {shlex.quote('ASTERION_SERVER_URL=' + center)} {CONF}/agent.env")
+                f"grep -Eq {endpoint_pattern} {STATE}/identity.json")
     # Keep the complete release (including optional helpers) and the previous symlink target.
     # Only change current after the upload has been verified. The trap handles a failed restart.
     install = f"""set -eu
