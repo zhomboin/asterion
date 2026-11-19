@@ -21,7 +21,7 @@ IDENTITY = Path("/var/lib/asterion-agent/identity.json")
 DATABASE = Path("/var/lib/asterion/asterion.db")
 
 
-def register(port, username):
+def register(port, username, receipt=None):
     if not 1 <= port <= 65535:
         raise SystemExit("中心端口无效")
     os.umask(0o077)
@@ -29,7 +29,7 @@ def register(port, username):
     token_file = BOOT_DIR / "token"
     with (BOOT_DIR / "register.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if token_file.exists():
+        if receipt is None and token_file.exists():
             if not re.fullmatch(r"[0-9a-f]{64}", token_file.read_text().strip()):
                 raise SystemExit("已有注册文件不完整，请核对待接入节点")
             return
@@ -53,14 +53,38 @@ def register(port, username):
         try:
             query = urllib.parse.urlencode({"q": NODE_NAME, "limit": 100})
             page = request("nodes?" + query)
-            if page["has_more"] or any(
-                node["name"] == NODE_NAME for node in page["nodes"]
-            ):
+            matches = [n for n in page["nodes"] if n["name"] == NODE_NAME]
+            if page["has_more"]:
+                raise SystemExit("无法唯一识别本机节点")
+            if receipt is not None and receipt.exists():
+                node_id = receipt.read_text().strip()
+                if (
+                    not re.fullmatch(r"[a-f0-9]{32}", node_id)
+                    or len(matches) != 1
+                    or matches[0]["id"] != node_id
+                ):
+                    raise SystemExit("自监控安装记录与中心不同，请检查原节点")
+                if matches[0]["status"] != "pending":
+                    if IDENTITY.is_file():
+                        # 中心可能已接受设备凭证，但 Agent 尚未来得及保存节点编号。
+                        token_file.unlink(missing_ok=True)
+                        return
+                    raise SystemExit("已接入的本机节点缺少原身份文件")
+                issued = request(f"nodes/{node_id}/enrollment-token", {})
+            elif matches:
                 raise SystemExit("已有同名节点或结果不唯一，请在面板核对现有记录")
-            issued = request("nodes/enrollment-token", {"name": NODE_NAME, "kind": "linux"})
+            else:
+                issued = request(
+                    "nodes/enrollment-token", {"name": NODE_NAME, "kind": "linux"}
+                )
+                if receipt is not None:
+                    if not re.fullmatch(r"[a-f0-9]{32}", issued["node_id"]):
+                        raise SystemExit("中心返回的节点编号无效")
+                    with receipt.open("x") as saved:
+                        print(issued["node_id"], file=saved)
             if not re.fullmatch(r"[0-9a-f]{64}", issued["token"]):
                 raise SystemExit("中心返回的注册凭证格式无效")
-            with token_file.open("x") as stream:
+            with token_file.open("w") as stream:
                 print(issued["token"], file=stream)
         finally:
             request("auth/logout", {})
@@ -90,9 +114,12 @@ if __name__ == "__main__":
     enrollment = commands.add_parser("register", help="在回环 HTTPS 中心登记本机")
     enrollment.add_argument("--port", type=int, required=True)
     enrollment.add_argument("--username", required=True)
+    enrollment.add_argument(
+        "--receipt", type=Path, help="首次安装时持久保存的本机节点编号"
+    )
     commands.add_parser("wait", help="等待本机新的心跳和指标")
     args = parser.parse_args()
     if args.command == "register":
-        register(args.port, args.username)
+        register(args.port, args.username, args.receipt)
     else:
         wait_for_sample()
