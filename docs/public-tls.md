@@ -59,7 +59,9 @@ systemctl list-timers --all certbot.timer
 
 ## 验证 Nginx 实际提供的证书
 
-在[服务器部署第 3 节](deployment.md#3-安装中心配置-nginx-并开启自监控)配置或更新域名站点。Nginx 的 `ssl_certificate` 使用 `/etc/letsencrypt/live/<面板域名>/fullchain.pem`，`ssl_certificate_key` 使用同目录的 `privkey.pem`。保存站点配置后执行以下命令，从回环地址带上域名校验源站证书及实际指纹。
+首次部署请先回到[服务器部署](deployment.md#3-安装中心配置-nginx-并开启自监控)，启用域名站点后再进行本项验收。迁移主机时还需按[备份和恢复](deployment.md#6-备份和恢复)在新主机验证自动续期。
+
+Nginx 的 `ssl_certificate` 使用 `/etc/letsencrypt/live/<面板域名>/fullchain.pem`，`ssl_certificate_key` 使用同目录的 `privkey.pem`。保存站点配置后执行以下命令，从回环地址带上域名校验源站证书及实际指纹。
 
 ```bash
 nginx -t

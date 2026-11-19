@@ -20,9 +20,9 @@ sudoedit /etc/asterion/server.env
 | 设置 | 要求 |
 | --- | --- |
 | `ASTERION_SSH_DEPLOY_AGENT` | 经校验、不可被面板用户替换的 Linux Agent 二进制绝对路径。实际上传的文件在目标机再次校验 SHA-256。 |
-| `ASTERION_SSH_DEPLOY_CENTER_URL` | 目标机可访问且证书匹配的中心 HTTPS 源地址。不是浏览器的本地代理地址。 |
+| `ASTERION_SSH_DEPLOY_CENTER_URL` | 服务器部署填写 `https://<面板域名>`：目标机通过 Nginx 注册并上报。不要填写 SSH 目标 IP、中心回环地址或内部监听端口。 |
 | `ASTERION_SSH_DEPLOY_NETWORKS` | 可部署目标的 CIDR 清单，逗号分隔。仅授权必要主机或管理网段。域名的所有解析结果都必须在清单内。 |
-| `ASTERION_SSH_DEPLOY_CA_FILE` | 可选，目标机需要信任的公开 CA 证书；不得填写私钥。使用公共受信 CA 时不设置。 |
+| `ASTERION_SSH_DEPLOY_CA_FILE` | 使用 Let's Encrypt 公网入口时不设置，远端节点使用系统信任库。仅当节点直接连接私有 CA 签发的入口时，才提供该 CA 的公开证书。 |
 
 4. 在中心重启并检查健康：
 
@@ -32,6 +32,8 @@ sudo systemctl status --no-pager asterion-server.service
 ```
 
 ## 接入一台新服务器
+
+接入前可在目标机运行 `curl --fail --show-error https://<面板域名>/healthz`（先替换域名）。如报告证书错误，先按[公网证书验收](public-tls.md#验证-nginx-实际提供的证书)检查 Nginx 提供的证书，并确认目标系统的受信根已更新。不要跳过证书校验或用重新部署 Agent 代替修复证书。
 
 1. 在「节点 → 接入服务器」填写节点名、环境、SSH 主机、端口和用户名。选择「核对主机与部署命令」。此时只握手读取指纹，不提交 SSH 登录凭据。
 2. 用受信任的主机控制台或管理员提供的指纹核对。可在目标机的可信控制台列出 SSH 主机公钥的 SHA-256 指纹：
