@@ -1,0 +1,11 @@
+{
+  "app-settings": {
+    "path": "<无密钥的应用 JSON 配置文件绝对路径>",
+    "unit": "<完整服务名.service>",
+    "reload": "reload",
+    "fields": {
+      "log_level": { "choices": ["info", "warn", "error"] },
+      "workers": { "min": 1, "max": 8 }
+    }
+  }
+}

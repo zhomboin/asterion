@@ -11,6 +11,9 @@ const auditLabels: Record<string, string> = {
 };
 
 const accountErrors: Record<string, string> = {
+  agent_invalid_change: '配置校验未通过，或参数不在节点允许范围内。',
+  agent_target_changed: '目标或配置已变化，请重新读取后确认。',
+  agent_busy: '节点正在处理其他任务，请稍后重新核对状态。',
   agent_account_conflict: '账号、家目录或公钥已存在，或授权文件已变化。请刷新后核对。',
   agent_account_not_found: '节点上找不到所需的账号、目录或公钥。',
 };

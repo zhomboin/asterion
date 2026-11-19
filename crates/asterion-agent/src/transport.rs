@@ -41,6 +41,8 @@ pub async fn run(
     let mut tasks = HashMap::<String, AbortHandle>::new();
     let mut last_control_id = 0;
     let mut terminals = crate::terminal_proxy::TerminalProxy::new();
+    let mut container_terminal = crate::terminal_proxy::TerminalProxy::container();
+    let mut container_session = None::<String>;
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
@@ -98,10 +100,21 @@ pub async fn run(
                             && !tasks.contains_key(&request.request_id), "中心查询标识无效");
                         let id = request.request_id.clone();
                         let remaining = unix_time().map_or(0, |now| request.expires_at.saturating_sub(now));
-                        if remaining <= 0 || remaining > MAX_TASK_TTL {
+                        let limit = if request.kind == "operation_execute" { 930 } else { MAX_TASK_TTL };
+                        if remaining <= 0 || remaining > limit {
                             sender.answer(socket, id, AgentReply::failure("timeout", "查询截止时间无效")).await?;
                         } else if request.kind.starts_with("terminal_") {
-                            let reply = terminals.handle(request).await;
+                            let open = request.kind == "terminal_container_open";
+                            let session = request.args["id"].as_str().map(str::to_owned);
+                            let reply = if open || request.kind == "terminal_container_capability" ||
+                                (session.is_some() && container_session == session && request.kind != "terminal_open") {
+                                container_terminal.handle(request).await
+                            } else {
+                                terminals.handle(request).await
+                            };
+                            if open && matches!(&reply, AgentReply::Success { value } if value["opened"] == true) {
+                                container_session = session;
+                            }
                             sender.answer(socket, id, reply).await?;
                         } else if let Some(task) = worker.task(&mut jobs, request, &progress) {
                             tasks.insert(id, task);

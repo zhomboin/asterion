@@ -113,7 +113,12 @@ impl AgentBus {
         args: Value,
         deadline: Duration,
     ) -> Result<PendingTask, BusError> {
-        if !is_node_id(request_id) || !(1..=120).contains(&deadline.as_secs()) {
+        let limit = if kind == "operation_execute" {
+            930
+        } else {
+            120
+        };
+        if !is_node_id(request_id) || !(1..=limit).contains(&deadline.as_secs()) {
             return Err(BusError::Busy);
         }
         let (response, rx) = oneshot::channel();

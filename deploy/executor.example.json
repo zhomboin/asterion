@@ -1,4 +1,9 @@
 {
+  "managed": {
+    "packages": "/run/asterion-managed-packages/requests.sock",
+    "configs": "/run/asterion-managed-configs/requests.sock",
+    "containers": "/run/asterion-managed-containers/requests.sock"
+  },
   "systemd_units": ["<允许操作的完整服务 Unit 名称>"],
   "docker": {
     "operator_socket": "/run/asterion-docker-operator/requests.sock",

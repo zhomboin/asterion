@@ -40,6 +40,8 @@ Docker 变更使用独立的操作 Socket。其策略同时限定 Engine ID、�
 
 ## 受控任务
 
+节点的「软件安装」「服务配置」以及 Docker 页的「容器服务」独立授权；通用预定义命令不代替这些入口。未授权时仍可监控。配置方式、恢复和限制见[节点操作](managed-operations.md)。systemd 清单可直接准备启停任务，任务完成后读取服务实际状态。
+
 默认 Agent 未加载运维策略。启用时，将[策略样例](../deploy/executor.example.json)复制到受保护的配置目录，删除不使用的能力并替换占位符，设置 `ASTERION_EXECUTOR_CONFIG_FILE` 后重启 Agent。预定义命令使用绝对可执行路径和类型化参数，参数校验在节点侧执行。systemd 白名单登记具体的 `.service` 名称，包含 `\xHH` 转义的实例名称须按 systemd 显示的完整名称填写。[systemd Unit 命名规则](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
 
 在相应容器、Unit、进程或预定义命令处发起任务，核对节点、目标和动作后确认。进程信号按 PID 和启动标识核验，KILL 需要重新验证管理员口令。运维页展示状态、已收到的输出、耗时和审计。在发起任务的登录会话中确认或取消任务。确认和取消采用异步处理，页面随后读取任务状态。预定义命令的子进程须留在任务进程组，取消和超时会清理该组。已经应用的服务状态变更需要通过后续操作恢复。受控本地命令要求支持 seccomp 的 Linux x86-64 或 AArch64。

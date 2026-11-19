@@ -7,11 +7,22 @@ export type AccountChange =
   | { type: 'remove_key'; username: string; fingerprint: string };
 
 export type OperationAction =
+  | { type: 'managed'; change: ManagedChange }
   | { type: 'account'; change: AccountChange }
   | { type: 'systemd'; unit: string; verb: ServiceVerb }
   | { type: 'docker'; engine_id: string; container_id: string; verb: ServiceVerb }
   | { type: 'process'; pid: number; start_ticks: number; signal: ProcessSignal }
   | { type: 'command'; name: string; parameters: Record<string, string> };
+
+export const managedLabels = {
+  install: '安装软件', save_reload: '保存并应用配置', create: '创建容器', recreate: '重建容器',
+  start: '启动容器', stop: '停止容器', restart: '重启容器',
+};
+
+export type ManagedChange = {
+  key: string; verb: keyof typeof managedLabels; revision: string; digest?: string; profile?: string;
+  settings?: { restart: string; ports: [number, number][]; mounts: string[] };
+};
 
 type OperationState =
   | 'prepared' | 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out'
@@ -25,6 +36,7 @@ export type CommandParameter =
 export type Command = { name: string; timeout_seconds: number; parameters: CommandParameter[] };
 
 export type OperationCatalog = {
+  managed?: string[];
   enabled: boolean;
   systemd_units: string[];
   docker_targets: { engine_id: string; container_ids: string[] }[];
@@ -35,7 +47,7 @@ export type OperationCatalog = {
 
 export type NodeOperations = {
   catalog: OperationCatalog;
-  propose: (action: OperationAction, resourceName?: string) => void;
+  propose: (action: OperationAction, resourceName?: string, content?: string) => void;
 };
 
 export type PreparedOperation = {
@@ -98,6 +110,7 @@ const namesByChange = {
 export function operationName(action: OperationAction): string {
   if (action.type === 'account') return namesByChange[action.change.type];
   switch (action.type) {
+    case 'managed': return managedLabels[action.change.verb];
     case 'systemd': return serviceVerbLabel[action.verb] + ' systemd 服务';
     case 'docker': return serviceVerbLabel[action.verb] + '容器';
     case 'process': return action.signal === 'kill' ? '强制终止进程' : '终止进程';
@@ -108,6 +121,7 @@ export function operationName(action: OperationAction): string {
 export function operationTarget(action: OperationAction): string {
   if (action.type === 'account') return action.change.username;
   switch (action.type) {
+    case 'managed': return action.change.key;
     case 'systemd': return action.unit;
     case 'docker': return action.container_id;
     case 'process': return 'PID ' + action.pid;

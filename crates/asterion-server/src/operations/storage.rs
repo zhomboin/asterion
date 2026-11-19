@@ -135,6 +135,9 @@ pub(super) async fn get(
     tx.commit().await?;
     let can_cancel = same_session
         && matches!(summary.state.as_str(), "prepared" | "queued" | "running")
+        && !(summary.state == "running"
+            && serde_json::from_str::<Value>(&summary.action)
+                .is_ok_and(|action| action["type"] == "managed"))
         && summary.cancel_requested_at.is_none();
     Ok(Json(Detail {
         summary,

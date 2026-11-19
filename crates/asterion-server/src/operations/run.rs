@@ -99,6 +99,14 @@ async fn dispatch(
     task: OperationTask,
 ) -> Result<Option<Result<PendingTask, BusError>>, sqlx::Error> {
     let id = task.task_id.clone();
+    let deadline = match &task.action {
+        OperationAction::Managed { change }
+            if change.verb == asterion_protocol::managed::ManagedVerb::Install =>
+        {
+            Duration::from_secs(930)
+        }
+        _ => DEADLINE,
+    };
     let payload = serde_json::to_value(task).map_err(sqlx::Error::decode)?;
     let mut tx = pool.begin().await?;
     let updated = sqlx::query(
@@ -114,7 +122,7 @@ async fn dispatch(
         return Ok(None);
     }
     // 取消与下发通过任务事务保持顺序。未进入 Agent 队列时不记录任务启动。
-    let pending = match bus.enqueue(node, &id, "operation_execute", payload, DEADLINE) {
+    let pending = match bus.enqueue(node, &id, "operation_execute", payload, deadline) {
         Ok(pending) => pending,
         Err(error) => {
             tx.rollback().await?;
@@ -187,6 +195,8 @@ impl Outcome {
                 "target_changed" | "target_mismatch" => {
                     Self::with_error("failed", "agent_target_changed")
                 }
+                "invalid_argument" => Self::with_error("failed", "agent_invalid_change"),
+                "agent_busy" => Self::with_error("failed", "agent_busy"),
                 "conflict" if account_change => {
                     Self::with_error("failed", "agent_account_conflict")
                 }
@@ -331,6 +341,7 @@ mod tests {
             OperationTask {
                 task_id: id.clone(),
                 action,
+                content: None,
             },
         );
         tokio::time::timeout(Duration::from_secs(2), async {

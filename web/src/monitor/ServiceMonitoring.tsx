@@ -3,6 +3,8 @@ import { errorMessage, isUnauthorized, request } from '../api';
 import { DataTable, Pagination, Problem, Timestamp } from '../ui';
 import { monitorPageSize, useMonitorPage } from './MonitorPicker';
 import { useResource } from '../useResource';
+import { ServiceActions } from '../operations/ServiceActions';
+import type { NodeOperations } from '../operations/data';
 import { monitorReason, type ServiceMonitor, type ServiceMonitorChange, type ServiceMonitorStatus } from './serviceMonitoring';
 
 export const serviceMonitorRefreshMs = 5_000;
@@ -33,7 +35,8 @@ function reasonText(reason: ServiceMonitor['reason']) {
   return reason ? (monitorReason[reason] ?? '服务检查失败') : '—';
 }
 
-export function ServiceMonitorList({ monitors, unavailable, onSelect }: {
+export function ServiceMonitorList({ monitors, unavailable, onSelect, operations }: {
+  operations?: NodeOperations;
   monitors: ServiceMonitor[];
   unavailable?: string;
   onSelect: (unit: string, action: HTMLButtonElement) => void;
@@ -55,6 +58,10 @@ export function ServiceMonitorList({ monitors, unavailable, onSelect }: {
               aria-label={'查看监控 ' + monitor.unit}
               onClick={(event) => onSelect(monitor.unit, event.currentTarget)}
             >详情</button>
+            {!unavailable && operations?.catalog.systemd_units.includes(monitor.unit)
+              ? <ServiceActions title={monitor.unit} onChoose={(verb) =>
+                operations.propose({ type: 'systemd', unit: monitor.unit, verb })} />
+              : <span className="table-secondary">{unavailable || '仅监控'}</span>}
           </td>
         </tr>
       ))}

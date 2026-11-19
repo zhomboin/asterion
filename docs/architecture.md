@@ -36,3 +36,7 @@ Agent 使用一次性注册凭证取得节点身份，将设备凭证保存在�
 - [ADR-005 systemd 读取方式](adr/005-systemd.md)
 - [ADR-006 节点与运行环境身份](adr/006-identity.md)
 - [ADR-007 受控运维边界](adr/007-operations.md)
+
+## 节点写操作入口
+
+节点通过原有 Agent 连接执行受管变更。中心验证登录会话和确认凭证，节点上的独立服务从本机策略解析资源标识。安装、写配置和 Docker 权限不交给 Agent。详见[节点操作](managed-operations.md)。

@@ -8,6 +8,8 @@ cd '<Asterion 工作区>'
 
 ## 1. 准备工具
 
+本地验证新的服务器操作使用 Python 标准库和隔离测试，不要求安装 Docker 或变更主机配置。完成工具准备后，按[本地运维验证](managed-operations.md#本地运维验证)执行。
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y build-essential ca-certificates curl git openssl python3 sqlite3 xz-utils

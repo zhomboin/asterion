@@ -12,6 +12,7 @@ import { ProposalDialog } from '../operations/ProposalDialog';
 import type { NodeOperations, OperationAction, OperationCatalog } from '../operations/data';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { AccountsPanel } from '../accounts/AccountsPanel';
+import { ManagedPanel } from '../operations/ManagedPanel';
 
 const tabs = [
   ['metrics', '指标'],
@@ -21,7 +22,7 @@ const tabs = [
   ['accounts', 'Linux 账号'],
 ] as const;
 
-type Tab = (typeof tabs)[number][0] | 'command' | 'terminal';
+type Tab = (typeof tabs)[number][0] | 'command' | 'terminal' | 'packages' | 'configs';
 
 export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () => void }) {
   const base = '/nodes/' + encodeURIComponent(id);
@@ -34,9 +35,9 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
   const terminal = useResource<{ enabled: boolean }>(online ? base + '/terminal/capability' : null, onExpired, 30_000);
   const hasTerminal = Boolean(online && terminal.data?.enabled && !terminal.error);
   const [connect, setConnect] = useState(false);
-  const [proposal, setProposal] = useState<{ action: OperationAction; name?: string }>();
+  const [proposal, setProposal] = useState<{ action: OperationAction; name?: string; content?: string }>();
   const operations: NodeOperations | undefined = online && operationCatalog.data?.enabled && !operationCatalog.error
-    ? { catalog: operationCatalog.data, propose: (action, name) => setProposal({ action, name }) }
+    ? { catalog: operationCatalog.data, propose: (action, name, content) => setProposal({ action, name, content }) }
     : undefined;
   const canOperate = operations !== undefined;
   useEffect(() => {
@@ -48,6 +49,7 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
 
   const tabItems: (readonly [Tab, string])[] = [
     ...tabs,
+    ['packages', '软件安装'], ['configs', '服务配置'],
     ...(hasCommands ? [['command', '预定义命令'] as const] : []),
     ...(hasTerminal ? [['terminal', '终端'] as const] : []),
   ];
@@ -82,6 +84,9 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
           )}
           {activeTab === 'processes' && <ProcessesPanel base={base} online={online} onExpired={onExpired} operations={operations} />}
           {activeTab === 'docker' && <DockerPanel base={base} online={online} onExpired={onExpired} operations={operations} />}
+          {(activeTab === 'packages' || activeTab === 'configs' || activeTab === 'docker') &&
+            <ManagedPanel key={id + activeTab} group={activeTab === 'docker' ? 'containers' : activeTab}
+              base={base} nodeId={id} online={online} controls={operations} onExpired={onExpired} />}
           {activeTab === 'systemd' && <SystemdPanel
             base={base}
             agentState={node.error ? 'unknown' : data.status}
@@ -99,6 +104,7 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
               nodeName={data.name}
               action={proposal.action}
               resourceName={proposal.name}
+              content={proposal.content}
               onClose={() => setProposal(undefined)}
               onExpired={onExpired}
             />

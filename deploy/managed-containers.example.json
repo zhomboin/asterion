@@ -1,0 +1,23 @@
+{
+  "app": {
+    "name": "<容器名称>",
+    "engine_id": "<本机 Engine ID>",
+    "terminal": false,
+    "profiles": {
+      "standard": {
+        "image": "<本地镜像地址>@sha256:<64位摘要>",
+        "restart": "unless-stopped",
+        "restart_choices": ["no", "unless-stopped", "on-failure"],
+        "port_choices": [],
+        "mount_choices": {
+          "extra-config": { "source": "<可选配置文件绝对路径>", "destination": "<可选容器内绝对路径>" }
+        },
+        "ports": [],
+        "mounts": [
+          { "source": "<非敏感配置文件绝对路径>", "destination": "<容器内绝对路径>" },
+          { "volume": "<已有命名数据卷>", "destination": "<容器内数据目录>" }
+        ]
+      }
+    }
+  }
+}

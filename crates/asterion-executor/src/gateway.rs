@@ -9,7 +9,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::{ExecError, policy};
 
-const MAX_REQ_BYTES: usize = 24 * 1024;
+const MAX_REQ_BYTES: usize = 52 * 1024;
 const MAX_RESPONSE_BYTES: usize = 96 * 1024;
 const HEADER_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -41,6 +41,7 @@ pub(crate) async fn execute<R: DeserializeOwned>(
                 "target_changed" => ExecError::STALE_TARGET,
                 "timeout" => ExecError::TIMEOUT,
                 "task_replayed" => ExecError::REPLAY,
+                "agent_busy" => ExecError::BUSY,
                 "not_found" => ExecError::new("not_found", "目标不存在"),
                 "conflict" => ExecError::new("conflict", "目标已存在或已发生变化"),
                 _ => ExecError::FAILED,
