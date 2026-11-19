@@ -7,7 +7,7 @@ import { useResource } from './useResource';
 type Inspection = {
   ticket: string; address: string; fingerprint: string; center: string; commands: string[];
 };
-type Job = { id: string; node_id: string };
+type Job = { id: string; node_id: string; sshTarget?: string };
 type Snapshot = { state: 'running' | 'failed' | 'deployed'; heartbeat: boolean; lines: string[] };
 type Props = { existing?: Node; onManual: () => void; onExpired: () => void };
 
@@ -89,11 +89,12 @@ export function SshEnrollment({ existing, onManual, onExpired }: Props) {
         ticket: plan.ticket, fingerprint: plan.fingerprint, node: existing ? undefined : { ...node, tags: node.tags.map((tag) => tag.trim()).filter(Boolean) }, method,
         secret: values.get('secret'), passphrase: method === 'key' ? values.get('passphrase') || null : null,
       } });
-      try { sessionStorage.setItem(lastJob, JSON.stringify(started)); } catch { setError('当前浏览器不支持重新打开部署日志。'); }
+      const deployedJob = { ...started, sshTarget: target.user.trim() + '@' + target.host.trim() };
+      try { sessionStorage.setItem(lastJob, JSON.stringify(deployedJob)); } catch { setError('当前浏览器不支持重新打开部署日志。'); }
       if (active.current) {
         form.reset();
         setPlan(undefined);
-        setJob(started);
+        setJob(deployedJob);
       }
     } catch (failure) {
       if (isUnauthorized(failure)) onExpired(); else setError(errorMessage(failure));
@@ -112,7 +113,7 @@ export function SshEnrollment({ existing, onManual, onExpired }: Props) {
       }}>{existing ? '重新部署 Agent' : '接入另一台服务器'}</button>}
     </div>
     <h2>执行命令与日志</h2>
-    <DeploymentLog lines={snapshot?.lines ?? []} failed={snapshot?.state === 'failed'} />
+    <DeploymentLog lines={snapshot?.lines ?? []} target={job.sshTarget} />
   </div>;
   if (plan) return <form className="fields" onSubmit={deploy}>
     <dl className="detail-facts">
