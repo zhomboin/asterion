@@ -17,7 +17,21 @@ pub struct TerminalProxy {
 
 impl TerminalProxy {
     pub fn new() -> Self {
-        let path = std::env::var_os("ASTERION_TERMINAL_HELPER_SOCKET")
+        Self::configured(
+            "ASTERION_TERMINAL_HELPER_SOCKET",
+            "ASTERION_TERMINAL_ENABLED",
+        )
+    }
+
+    pub fn container() -> Self {
+        Self::configured(
+            "ASTERION_CONTAINER_TERMINAL_SOCKET",
+            "ASTERION_CONTAINER_TERMINAL_ENABLED",
+        )
+    }
+
+    fn configured(variable: &str, enabled: &str) -> Self {
+        let path = std::env::var_os(variable)
             .map(PathBuf::from)
             .filter(|path| {
                 path.is_absolute()
@@ -28,7 +42,7 @@ impl TerminalProxy {
                         )
                     })
             })
-            .filter(|_| std::env::var("ASTERION_TERMINAL_ENABLED").as_deref() == Ok("1"));
+            .filter(|_| std::env::var(enabled).as_deref() == Ok("1"));
         Self {
             path,
             connection: None,
@@ -36,7 +50,11 @@ impl TerminalProxy {
     }
 
     pub async fn handle(&mut self, request: TaskRequest) -> AgentReply {
-        let retry_read = request.kind == "terminal_capability" && self.connection.is_some();
+        let capability = matches!(
+            request.kind.as_str(),
+            "terminal_capability" | "terminal_container_capability"
+        );
+        let retry_read = capability && self.connection.is_some();
         if let Ok(Ok(reply)) = timeout(Duration::from_secs(2), self.exchange(&request)).await {
             return reply;
         }
@@ -48,7 +66,7 @@ impl TerminalProxy {
             return reply;
         }
         self.connection = None;
-        if request.kind == "terminal_capability" {
+        if capability {
             AgentReply::Success {
                 value: json!({"enabled":false}),
             }

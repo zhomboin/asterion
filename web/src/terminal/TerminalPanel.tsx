@@ -4,7 +4,9 @@ import { TerminalSession } from './TerminalSession';
 import { initialTerminalSize } from './Screen';
 
 
-export function TerminalPanel({ nodeId, onExpired }: { nodeId: string; onExpired: () => void }) {
+export function TerminalPanel({ nodeId, container, onExpired }: {
+  nodeId: string; container?: { key: string; id: string; engine: string }; onExpired: () => void;
+}) {
   const [id, setId] = useState<string>();
   const [error, setError] = useState('');
   const [opening, setOpening] = useState(false);
@@ -25,7 +27,7 @@ export function TerminalPanel({ nodeId, onExpired }: { nodeId: string; onExpired
     try {
       const created = await request<{ id: string }>('/nodes/' + encodeURIComponent(nodeId) + '/terminal', {
         method: 'POST',
-        body: { password, ...initialTerminalSize },
+        body: { password, container, ...initialTerminalSize },
       });
       if (!mounted.current) {
         void request('/terminal/' + encodeURIComponent(created.id), {
@@ -48,7 +50,7 @@ export function TerminalPanel({ nodeId, onExpired }: { nodeId: string; onExpired
     <section className="monitor-view" aria-label="终端">
       {!id && (
         <form className="fields detail-panel terminal-login" method="post" onSubmit={open}>
-          <h2>打开终端</h2>
+          <h2>{container ? '进入容器' : '打开终端'}</h2>
           <label>管理员口令<input name="password" type="password" autoComplete="current-password" required /></label>
           {error && <p role="alert" className="error">{error}</p>}
           <button type="submit" className="primary" disabled={opening}>{opening ? '正在连接…' : '连接'}</button>

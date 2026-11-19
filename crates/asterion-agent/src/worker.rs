@@ -58,7 +58,11 @@ impl Worker {
     ) -> Option<AbortHandle> {
         if matches!(
             request.kind.as_str(),
-            "operation_catalog" | "operation_execute" | "accounts" | "account_keys"
+            "operation_catalog"
+                | "operation_execute"
+                | "accounts"
+                | "account_keys"
+                | "managed_query"
         ) {
             let executor = Arc::clone(&self.executor);
             let progress = progress.clone();
@@ -105,6 +109,14 @@ async fn execute(
     request: TaskRequest,
     progress: mpsc::Sender<(String, TaskProgress)>,
 ) -> AgentReply {
+    if request.kind == "managed_query" {
+        let group = request.args["group"].as_str().unwrap_or_default();
+        return reply(
+            executor
+                .managed_query(group, request.args["key"].as_str())
+                .await,
+        );
+    }
     if request.kind == "accounts" {
         return match spawn_blocking(move || executor.accounts()).await {
             Ok(result) => reply(result),

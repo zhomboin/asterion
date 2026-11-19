@@ -75,6 +75,7 @@ export function SystemdPanel({ base, agentState, initialUnit, onExpired, operati
         {monitors.loading && <p role="status">正在读取监控服务…</p>}
         {monitors.error && <Problem error={monitors.error} retry={monitors.refresh} />}
         {monitors.data && <ServiceMonitorList
+          operations={operations}
           monitors={includeDisabled ? monitors.data.monitors : monitors.data.monitors.filter((item) => item.enabled)}
           unavailable={unavailable}
           onSelect={selectUnit}

@@ -3,11 +3,12 @@ import { errorMessage, isUnauthorized, request } from '../api';
 import { Timestamp } from '../ui';
 import { operationName, operationTarget, type AccountChange, type OperationAction, type PreparedOperation } from './data';
 
-export function ProposalDialog({ nodeId, nodeName, action, resourceName, onClose, onExpired }: {
+export function ProposalDialog({ nodeId, nodeName, action, resourceName, content, onClose, onExpired }: {
   nodeId: string;
   nodeName: string;
   action: OperationAction;
   resourceName?: string;
+  content?: string;
   onClose: () => void;
   onExpired: () => void;
 }) {
@@ -47,7 +48,7 @@ export function ProposalDialog({ nodeId, nodeName, action, resourceName, onClose
       }
       const password = new FormData(form).get('password');
       const body = prepared.step_up_required
-        ? { challenge: prepared.challenge, password }
+        ? { challenge: prepared.challenge, password, content }
         : { challenge: prepared.challenge };
       const path = '/operations/' + encodeURIComponent(prepared.task_id);
       await request(path + '/confirm', { method: 'POST', body, response: 'empty' });
@@ -81,6 +82,13 @@ export function ProposalDialog({ nodeId, nodeName, action, resourceName, onClose
         )}
         {prepared && <div><dt>确认有效至</dt><dd><Timestamp value={prepared.expires_at} /></dd></div>}
         {selected.type === 'account' && <AccountImpact change={selected.change} />}
+        {selected.type === 'managed' && selected.change.profile &&
+          <div><dt>配置方案</dt><dd>{selected.change.profile}</dd></div>}
+        {selected.type === 'managed' && selected.change.settings && <>
+          <div><dt>重启策略</dt><dd>{selected.change.settings.restart}</dd></div>
+          <div><dt>可选端口</dt><dd>{selected.change.settings.ports.map((port) => port.join(' → ')).join('、') || '无'}</dd></div>
+          <div><dt>可选挂载</dt><dd>{selected.change.settings.mounts.join('、') || '无'}</dd></div>
+        </>}
         {selected.type === 'command' && Object.entries(selected.parameters).map(([key, value]) => (
           <div key={key}><dt>{key}</dt><dd className="technical">{value}</dd></div>
         ))}

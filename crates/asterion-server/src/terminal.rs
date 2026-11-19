@@ -25,6 +25,10 @@ const DISABLED: ApiError =
 pub(crate) fn routes() -> Router<SqlitePool> {
     Router::new()
         .route("/api/v1/nodes/{node}/terminal/capability", get(capability))
+        .route(
+            "/api/v1/nodes/{node}/container-terminal/capability",
+            get(container_capability),
+        )
         .route("/api/v1/nodes/{node}/terminal", post(open))
         .route("/api/v1/terminal/{id}", get(poll).delete(close))
         .route("/api/v1/terminal/{id}/input", post(input))
@@ -196,6 +200,21 @@ struct Dimensions {
     rows: u16,
 }
 
+async fn container_capability(
+    _: AdminSession,
+    Extension(hub): Extension<Arc<TerminalHub>>,
+    Extension(bus): Extension<Arc<AgentBus>>,
+    Path(node): Path<String>,
+) -> Json<Value> {
+    let enabled = hub.enabled
+        && is_node_id(&node)
+        && bus
+            .query(&node, "terminal_container_capability", json!({}))
+            .await
+            .is_ok_and(|value| value["enabled"] == true);
+    Json(json!({"enabled": enabled}))
+}
+
 impl Dimensions {
     fn valid(&self) -> bool {
         (20..=400).contains(&self.cols) && (5..=200).contains(&self.rows)
@@ -206,8 +225,17 @@ impl Dimensions {
 #[serde(deny_unknown_fields)]
 struct Opening {
     password: String,
+    container: Option<ContainerTarget>,
     cols: u16,
     rows: u16,
+}
+
+#[derive(serde::Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContainerTarget {
+    key: String,
+    id: String,
+    engine: String,
 }
 
 async fn open(
@@ -221,6 +249,13 @@ async fn open(
 ) -> Result<(StatusCode, Json<Value>), OpenError> {
     if !hub.enabled {
         return Err(OpenError::Api(DISABLED));
+    }
+    if body.container.as_ref().is_some_and(|target| {
+        !asterion_protocol::operation::valid_identifier(&target.key, 64)
+            || !asterion_protocol::operation::valid_identifier(&target.engine, 128)
+            || !asterion_protocol::is_lower_hex(&target.id, 64)
+    }) {
+        return Err(OpenError::Api(ApiError::INVALID));
     }
     if !(Dimensions {
         cols: body.cols,
@@ -264,8 +299,16 @@ async fn open(
         .enqueue(
             &node,
             &id,
-            "terminal_open",
-            json!({"id":id,"cols":body.cols,"rows":body.rows}),
+            if body.container.is_some() {
+                "terminal_container_open"
+            } else {
+                "terminal_open"
+            },
+            if let Some(target) = &body.container {
+                json!({"id":id,"cols":body.cols,"rows":body.rows,"container":target})
+            } else {
+                json!({"id":id,"cols":body.cols,"rows":body.rows})
+            },
             OPEN_TIMEOUT,
         )
         .map_err(|error| OpenError::Api(bus_error(error)))?;
@@ -287,7 +330,8 @@ async fn open(
     // 如果等待 Agent 时登录会话被注销，释放保留项并再次关闭该终端。
     hub.node(&id, &session).map_err(OpenError::Api)?;
     let id = reservation.commit();
-    tracing::info!(action = "terminal_open", actor = %session.username, node_id = %node, terminal_id = %id, "终端会话已开启");
+    tracing::info!(action = "terminal_open", actor = %session.username, node_id = %node, terminal_id = %id,
+        container_id = body.container.as_ref().map(|target| target.id.as_str()), "终端会话已开启");
     Ok((StatusCode::CREATED, Json(json!({"id":id}))))
 }
 

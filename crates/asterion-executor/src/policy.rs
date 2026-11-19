@@ -19,6 +19,7 @@ const MAX_TIMEOUT_SECONDS: u64 = 120;
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Policy {
+    pub(crate) managed: BTreeMap<String, PathBuf>,
     pub(crate) systemd_units: Vec<String>,
     pub(crate) docker: Option<DockerPolicy>,
     pub(crate) accounts: Option<crate::accounts::operator::LocalPolicy>,
@@ -84,6 +85,12 @@ pub(crate) enum Rule {
 impl Policy {
     pub(crate) fn from_file(path: &Path) -> Result<Self, ExecError> {
         let mut policy: Self = read_policy(path)?;
+        for (group, socket) in &policy.managed {
+            if !matches!(group.as_str(), "configs" | "packages" | "containers") {
+                return Err(ExecError::POLICY);
+            }
+            validate_socket_path(socket)?;
+        }
         if policy.systemd_units.len() > MAX_RULES
             || policy.commands.len() > MAX_COMMANDS
             || policy
@@ -114,6 +121,7 @@ impl Policy {
 
     pub(crate) fn enabled(&self) -> bool {
         !self.systemd_units.is_empty()
+            || !self.managed.is_empty()
             || self.docker.is_some()
             || self.accounts.is_some()
             || self.process.term
@@ -154,6 +162,7 @@ impl Policy {
             .collect();
         json!({
             "enabled": self.enabled(),
+            "managed": self.managed.keys().collect::<Vec<_>>(),
             "systemd_units": self.systemd_units,
             "docker_engine_ids": engine_ids,
             "docker_targets": targets,

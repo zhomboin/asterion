@@ -186,6 +186,54 @@ async fn asset_binding_is_scoped_to_its_node_and_keeps_manual_fields() {
 }
 
 #[tokio::test]
+async fn managed_preparation_rejects_embedded_content_and_requires_step_up() {
+    let (pool, router, cookie, node) = fixture().await;
+    let path = format!("/api/v1/nodes/{node}/operations");
+    let change = json!({"key":"app","verb":"save_reload","revision":"a".repeat(64),
+        "digest":"b".repeat(64)});
+    let (status, _) = call(
+        &router,
+        &cookie,
+        "POST",
+        &path,
+        json!({"type":"managed","change":change,"content":"private text"}),
+    )
+    .await;
+    assert!(status.is_client_error());
+    let (status, prepared) = call(
+        &router,
+        &cookie,
+        "POST",
+        &path,
+        json!({"type":"managed","change":change}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(prepared["step_up_required"], true);
+    let (status, _) = call(
+        &router,
+        &cookie,
+        "POST",
+        &format!(
+            "/api/v1/operations/{}/confirm",
+            prepared["task_id"].as_str().unwrap()
+        ),
+        json!({"challenge":prepared["challenge"],"content":"private text"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let saved = sqlx::query_scalar::<_, String>("SELECT action FROM operation_jobs")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(&saved[0]).unwrap(),
+        json!({"type":"managed","change":change})
+    );
+}
+
+#[tokio::test]
 async fn operation_confirmation_is_single_use_and_bound_to_the_panel_session() {
     let (pool, router, cookie, node) = fixture().await;
     let other_cookie = session(&pool).await;

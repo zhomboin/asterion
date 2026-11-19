@@ -21,6 +21,8 @@ done
 install -d "$stage/web" "$stage/deploy"
 cp -a web/dist/. "$stage/web/"
 install -m 0644 deploy/*.service deploy/*.env.example deploy/*.example.json "$stage/deploy/"
+install -d "$stage/deploy/managed"
+install -m 0644 deploy/managed/{service,common,containers,console,host}.py "$stage/deploy/managed/"
 tar -C "$stage" -czf ".local/asterion-$release_id.tar.gz" bin web deploy
 (
   cd .local
@@ -407,6 +409,8 @@ sudo systemctl restart asterion-agent.service
 在节点的 Docker 页核对 Engine ID、容器和只读状态。
 
 ### 受控任务
+
+软件安装、在线配置编辑和容器创建使用[节点操作部署步骤](managed-operations.md)。只读节点不安装这些服务。升级或卸载已开启的实例前，先按该文的维护步骤处理。
 
 根据实际用途配置策略。未使用的部分从策略文件移除。systemd 动作仍由主机自己的授权策略决定。Docker 操作还需要下方的独立 Socket 服务。
 

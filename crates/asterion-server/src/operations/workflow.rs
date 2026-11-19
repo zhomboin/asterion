@@ -21,6 +21,37 @@ const CONFIRMATION_SECS: i64 = 120;
 const MAX_PREPARED_PER_SESSION: i64 = 16;
 const MAX_IN_FLIGHT: i64 = 8;
 
+#[derive(Deserialize)]
+pub(super) struct Selection {
+    key: Option<String>,
+}
+
+pub(super) async fn managed(
+    _: AdminSession,
+    State(pool): State<SqlitePool>,
+    Extension(bus): Extension<Arc<AgentBus>>,
+    Path((node, group)): Path<(String, String)>,
+    axum::extract::Query(selection): axum::extract::Query<Selection>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(group.as_str(), "configs" | "packages" | "containers")
+        || selection
+            .key
+            .as_deref()
+            .is_some_and(|key| !asterion_protocol::operation::valid_identifier(key, 64))
+    {
+        return Err(ApiError::INVALID);
+    }
+    node_name(&pool, &node).await?;
+    bus.query(
+        &node,
+        "managed_query",
+        json!({"group":group,"key":selection.key}),
+    )
+    .await
+    .map(Json)
+    .map_err(bus_error)
+}
+
 #[derive(Serialize)]
 pub(super) struct Preparation {
     task_id: String,
@@ -109,6 +140,7 @@ pub(super) async fn prepare(
 pub(super) struct Confirmation {
     challenge: String,
     password: Option<String>,
+    content: Option<String>,
 }
 
 pub(super) async fn confirm(
@@ -164,7 +196,7 @@ pub(super) async fn confirm(
 
     // 保证已落库的确认不依赖浏览器持续等待响应。
     tokio::spawn(async move {
-        let target = claim(&pool, &session, &id, &hash).await?;
+        let target = claim(&pool, &session, &id, &hash, body.content.as_deref()).await?;
         tokio::spawn(run::execute(
             pool,
             bus,
@@ -172,6 +204,7 @@ pub(super) async fn confirm(
             OperationTask {
                 task_id: id,
                 action: target.action,
+                content: body.content,
             },
         ));
         Ok::<_, ConfirmError>(())
@@ -197,6 +230,7 @@ async fn claim(
     session: &AdminSession,
     id: &str,
     challenge_hash: &[u8; 32],
+    content: Option<&str>,
 ) -> Result<Target, ConfirmError> {
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
     session.ensure_active(&mut tx).await?;
@@ -225,7 +259,7 @@ async fn claim(
     let action: OperationAction = serde_json::from_str(&encoded)
         .map_err(sqlx::Error::decode)
         .map_err(ApiError::from)?;
-    if !action.valid() {
+    if !action.valid() || !content_matches(&action, content) {
         return Err(ApiError::INVALID.into());
     }
     let (in_flight, node_busy) = sqlx::query_as::<_, (i64, bool)>(
@@ -270,8 +304,8 @@ pub(super) async fn cancel(
     }
     let mut tx = pool.begin().await?;
     storage::expire(&mut tx).await?;
-    let (node, state) = sqlx::query_as::<_, (String, String)>(
-        "SELECT node_id, state FROM operation_jobs WHERE id = ? AND actor = ? AND session_hash = ?",
+    let (node, state, managed) = sqlx::query_as::<_, (String, String, bool)>(
+        "SELECT node_id, state, json_extract(action, '$.type') = 'managed' FROM operation_jobs WHERE id = ? AND actor = ? AND session_hash = ?",
     )
     .bind(&id)
     .bind(&session.username)
@@ -281,6 +315,13 @@ pub(super) async fn cancel(
     .ok_or(NOT_FOUND)?;
 
     if state == "running" {
+        if managed {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "operation_not_cancellable",
+                "节点正在应用变更，不能强制中断",
+            ));
+        }
         let updated = sqlx::query(
             "UPDATE operation_jobs SET cancel_requested_at = unixepoch()
              WHERE id = ? AND cancel_requested_at IS NULL",
@@ -324,6 +365,20 @@ fn hash(challenge: &str) -> [u8; 32] {
     Sha256::digest(challenge.as_bytes()).into()
 }
 
+fn content_matches(action: &OperationAction, content: Option<&str>) -> bool {
+    match action {
+        OperationAction::Managed { change } if change.digest.is_some() => {
+            content.is_some_and(|text| {
+                text.len() <= 8192
+                    && !text.contains('\0')
+                    && change.digest.as_deref()
+                        == Some(&format!("{:x}", Sha256::digest(text.as_bytes())))
+            })
+        }
+        _ => content.is_none(),
+    }
+}
+
 fn random<const N: usize>() -> Result<String, ApiError> {
     let mut bytes = [0; N];
     getrandom::fill(&mut bytes).map_err(|_| {
@@ -334,4 +389,30 @@ fn random<const N: usize>() -> Result<String, ApiError> {
         )
     })?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(test)]
+mod managed_tests {
+    use super::*;
+    use asterion_protocol::managed::{ManagedAction, ManagedVerb};
+
+    #[test]
+    fn confirmation_is_bound_to_exact_content_and_does_not_persist_it() {
+        let text = "secret fixture";
+        let action = OperationAction::Managed {
+            change: ManagedAction {
+                key: "app".into(),
+                verb: ManagedVerb::SaveReload,
+                revision: "a".repeat(64),
+                digest: Some(format!("{:x}", Sha256::digest(text))),
+                profile: None,
+                settings: None,
+            },
+        };
+        assert!(action.valid() && action.privileged());
+        assert!(content_matches(&action, Some(text)));
+        assert!(!content_matches(&action, Some("different")));
+        assert!(!content_matches(&action, None));
+        assert!(!serde_json::to_string(&action).unwrap().contains(text));
+    }
 }

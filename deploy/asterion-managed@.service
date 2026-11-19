@@ -1,0 +1,26 @@
+[Unit]
+Description=Asterion managed operations (%i)
+
+[Service]
+Type=simple
+DynamicUser=yes
+User=asterion-mgr-%i
+Group=asterion-ops-%i
+UMask=0077
+RuntimeDirectory=asterion-managed-%i
+RuntimeDirectoryMode=0750
+StateDirectory=asterion-managed-%i
+StateDirectoryMode=0700
+LoadCredential=policy.json:/etc/asterion-agent/managed-%i.json
+ExecStart=/usr/bin/python3 -E -s -B /opt/asterion-agent/current/deploy/managed/service.py %i
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX
+KillMode=control-group
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

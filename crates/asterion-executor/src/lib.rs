@@ -12,6 +12,7 @@ mod accounts;
 mod child_group;
 mod docker;
 mod gateway;
+mod managed;
 mod policy;
 mod run;
 mod signal;
@@ -91,6 +92,10 @@ impl Executor {
         self.policy.catalog()
     }
 
+    pub async fn managed_query(&self, group: &str, key: Option<&str>) -> Result<Value, ExecError> {
+        managed::query(&self.policy.managed, group, key).await
+    }
+
     pub fn accounts(&self) -> Result<Value, ExecError> {
         accounts::inventory()
     }
@@ -132,20 +137,64 @@ impl Executor {
         if !asterion_protocol::is_lower_hex(&task.task_id, 32) || !task.action.valid() {
             return Err(ExecError::INVALID);
         }
-        let remaining = time_budget(expires_at)?;
+        let remaining = if matches!(task.action, OperationAction::Managed { .. }) {
+            bounded_budget(expires_at, 930)?
+        } else {
+            time_budget(expires_at)?
+        };
         let deadline = Instant::now() + remaining;
         let operation = self.authorize(&task.action)?;
         let _slot = self.running.try_acquire().map_err(|_| ExecError::BUSY)?;
         self.claim(task.task_id, remaining).await?;
         let result = match operation {
+            Authorized::Managed(socket, change) => {
+                managed::apply(
+                    socket,
+                    change,
+                    task.content.as_deref(),
+                    expires_at,
+                    deadline,
+                )
+                .await?
+            }
             Authorized::Command(program, args, timeout) => {
-                run::command_with_progress(
+                let mut outcome = run::command_with_progress(
                     program,
                     &args,
                     deadline.min(Instant::now() + timeout),
                     progress,
                 )
-                .await?
+                .await?;
+                if let OperationAction::Systemd { unit, verb } = &task.action
+                    && outcome.exit_code == Some(0)
+                {
+                    let state = run::command(
+                        program,
+                        &[
+                            "show".into(),
+                            "--property=ActiveState".into(),
+                            "--value".into(),
+                            "--".into(),
+                            unit.clone(),
+                        ],
+                        deadline,
+                    )
+                    .await?;
+                    let active = state.output.trim();
+                    let expected = match verb {
+                        ServiceVerb::Stop => active == "inactive",
+                        _ => matches!(active, "active" | "reloading"),
+                    };
+                    if state.exit_code != Some(0) || !expected {
+                        outcome.exit_code = Some(1);
+                        outcome
+                            .output
+                            .push_str("服务未达到预期状态，请核对服务详情");
+                    } else {
+                        outcome.output.push_str(&format!("服务状态：{active}"));
+                    }
+                }
+                outcome
             }
             Authorized::Docker {
                 socket,
@@ -187,6 +236,14 @@ impl Executor {
 
     fn authorize<'a>(&'a self, action: &'a OperationAction) -> Result<Authorized<'a>, ExecError> {
         match action {
+            OperationAction::Managed { change } => {
+                let socket = self
+                    .policy
+                    .managed
+                    .get(change.verb.kind())
+                    .ok_or(ExecError::DENIED)?;
+                Ok(Authorized::Managed(socket, change))
+            }
             OperationAction::Systemd { unit, verb } if self.policy.systemd_units.contains(unit) => {
                 Ok(Authorized::Command(
                     Path::new("/usr/bin/systemctl"),
@@ -261,6 +318,7 @@ impl Executor {
 }
 
 enum Authorized<'a> {
+    Managed(&'a Path, &'a asterion_protocol::managed::ManagedAction),
     Command(&'a Path, Vec<String>, Duration),
     Docker {
         socket: &'a Path,
@@ -280,6 +338,10 @@ enum Authorized<'a> {
 }
 
 pub(crate) fn time_budget(expires_at: i64) -> Result<Duration, ExecError> {
+    bounded_budget(expires_at, MAX_DEADLINE_SECONDS)
+}
+
+fn bounded_budget(expires_at: i64, limit: u64) -> Result<Duration, ExecError> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| ExecError::FAILED)?
@@ -289,7 +351,7 @@ pub(crate) fn time_budget(expires_at: i64) -> Result<Duration, ExecError> {
         .checked_sub(now)
         .filter(|seconds| *seconds > 0)
         .ok_or(ExecError::TIMEOUT)?;
-    if seconds > MAX_DEADLINE_SECONDS {
+    if seconds > limit {
         return Err(ExecError::INVALID);
     }
     Ok(Duration::from_secs(seconds))
