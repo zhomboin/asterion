@@ -1,6 +1,6 @@
 # 本地配置与启动
 
-本页在开发电脑上准备工具、创建开发证书、启动中心与前端，并验证本机 Agent。使用仓库忽略的 `.local/` 保存个人配置、口令、证书及测试数据。需要安装常驻服务时，请使用[服务器部署](deployment.md)。
+本页在开发电脑上启动中心、前端和本机 Agent。回环地址使用本地开发 CA，不需要域名、DNS 令牌或 Certbot。个人配置、口令、开发证书及测试数据保存在 Git 忽略的 `.local/`。部署到服务器时，按[服务器部署](deployment.md)配置 Nginx 和 [Let's Encrypt 公网证书](public-tls.md)，不要复制开发 CA 或私钥。
 
 在 Windows PowerShell 中运行 `wsl -d Ubuntu`。进入 WSL 后，将以下命令中的目录占位符替换为自己的 Asterion 工作区。后续命令均在 WSL Ubuntu 的 Bash 中执行。
 

@@ -85,7 +85,7 @@ printf '构建编号：%s\n' "$release_id"
 
 ## 2. 配置服务器与个人运维用户
 
-在 DNS 中将面板域名的 A 记录指向中心公网 IPv4。域名复用同机 Nginx 已有的 HTTPS 入口。管理电脑和远端 Agent 的出口地址可以访问此站点，云防火墙沿用现有 HTTPS 和 SSH 策略。内部监听端口选择空闲的高端口。
+在 DNS 中将面板域名的 A 记录指向中心公网 IPv4。管理电脑和远端 Agent 使用同一 Nginx HTTPS 入口；中心内部监听选择空闲的高端口，不对公网开放。为第 3 节准备 Let's Encrypt 注册邮箱及面板域名所在区域的 DNS 编辑令牌。本文使用 Cloudflare DNS-01 验证，不需要为了签发或续期开启 HTTP 端口。令牌只在中心服务器上按提示输入，不写进项目或 `server.env`。
 
 首次安装从中心管理员账号的家目录开始。运行以下命令进入 root Bash，后续配置和验收在这个会话中完成。私钥、证书、数据库和实际部署参数放在服务器私有目录。仓库中的样例保留占位符，本机留存的实际配置可放在 Git 忽略的 `.local/` 目录。
 
@@ -173,7 +173,14 @@ sudo -l -U "$ops"
 
 ## 3. 安装中心、配置 Nginx 并开启自监控
 
-在中心生成独立的内部 CA 和回环证书，供 Nginx 和同机 Agent 验证内部服务。CA 私钥以口令加密，备份到受保护的位置供续签。公网域名使用客户端信任的证书。
+本节配置两张用途不同的证书，不要互换：
+
+| 连接 | 使用的证书 | 续期责任 |
+| --- | --- | --- |
+| 浏览器、远端 Agent → Nginx 域名入口 | Let's Encrypt 公网证书 | 中心的 `certbot.timer` 定期检查；续期成功后检查并重载 Nginx |
+| Nginx、同机 Agent → 中心回环地址 | 内部 CA 签发的中心证书 | 运维人员在到期前用内部 CA 续签，更换证书后重启中心服务；不在 Certbot 管理范围内 |
+
+先生成内部 CA 和回环证书。CA 私钥以口令加密，备份到受保护的位置供续签。
 
 ```bash
 install -d -m 0700 /etc/asterion/pki
@@ -238,7 +245,7 @@ UNIT
 printf '面板用户名：%s-panel\n' "$ops"
 ```
 
-在同一 root Bash 中，先按 [Let's Encrypt 公网证书](public-tls.md)签发面板域名证书并启用自动续期，再继续启动中心。Nginx 直接引用 Certbot 管理的证书路径。回环连接使用本节生成的内部 CA。
+在同一 root Bash 中，保留第 2 节设置的 `domain`，先[准备 DNS 授权](public-tls.md#准备-dns-授权)，再[签发域名证书并启用自动续期](public-tls.md#签发证书并启用自动续期)。确认定时器有下次运行时间、模拟续期成功后回到这里。此时只检查磁盘上的证书；Nginx 实际提供的证书在站点配置完成后验收。
 
 ```bash
 public_chain="/etc/letsencrypt/live/$domain/fullchain.pem"
@@ -426,7 +433,7 @@ sudo ln -sfnT "$agent_release" /opt/asterion-agent/current
 sudoedit /etc/asterion-agent/agent.env
 ```
 
-将 `ASTERION_SERVER_URL` 改为 Agent 可访问的中心 HTTPS 源地址。如果使用私有 CA，将私有 CA 的公开证书拷贝到下列位置，并建立 CA 配置。使用系统已信任的 CA 时跳过此步。
+将 `ASTERION_SERVER_URL` 设为 `https://<面板域名>`。按本指南通过 Nginx 和 Let's Encrypt 接入时，远端 Agent 使用系统信任库，不设置 `ASTERION_AGENT_CA_FILE`，直接跳到注册凭证步骤。只有远端 Agent 确实连接私有 CA 签发的入口时，才执行下面两段配置。
 
 ```bash
 sudo install -d -m 0755 /etc/systemd/system/asterion-agent.service.d
@@ -507,7 +514,9 @@ sudo install -m 0600 /etc/systemd/system/asterion-server.service "$backup_dir/"
 readlink -f /opt/asterion/current | sudo tee "$backup_dir/release.txt" > /dev/null
 ```
 
-内部 CA 的签发私钥、Nginx 域名站点和公网证书按各自的密钥备份流程保管。确认 `quick_check` 返回 `ok`。发布包和 TLS 私钥按受控备份策略保存。Agent 身份由独立主机维护。需要保留身份时，备份 `agent.env`、私有 CA 设置（如有）和 `identity.json`。身份文件含设备凭证。也可在恢复后重新签发注册凭证。
+确认 `quick_check` 返回 `ok`。上述命令不包含公网证书。通过受控的加密备份另存 Nginx 域名站点、内部 CA 签发私钥和口令，以及 `/etc/letsencrypt/`。Certbot 的 `live/` 包含符号链接，只复制它不足以恢复续期；备份须保留链接、属主和权限。该目录还含证书私钥、ACME 账户和 DNS 令牌；若 Nginx 为多个站点共用，只允许有相应权限的管理员保管，不要在已有主机上整目录覆盖。
+
+Agent 身份由独立主机维护。要保留身份，备份 `agent.env`、私有 CA 设置（如有）和 `identity.json`。身份文件含设备凭证；也可在恢复后重新签发注册凭证。
 
 ```bash
 agent_backup="/var/backups/asterion-agent/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -572,6 +581,15 @@ sudo sqlite3 -batch -bail /var/lib/asterion/asterion.db \
 
 ```bash
 sudo systemctl start asterion-server.service
+```
+
+迁移中心主机时，先恢复内部回环证书并按第 3 节验证内部健康检查；公网入口单独验收。在新主机安装 Certbot 及 DNS 插件，恢复受保护的证书和续期配置；没有可用备份时，按[公网证书流程](public-tls.md)为同一面板域名重新签发。确认正式证书存在后再启用引用它的 Nginx 站点。按[证书验收](public-tls.md#验证-nginx-实际提供的证书)核对新主机实际提供的证书，并在新主机的 root Bash 中验证定时器和续期钩子：
+
+```bash
+domain='<面板域名>'
+systemctl enable --now certbot.timer
+systemctl list-timers --all certbot.timer
+/usr/bin/certbot renew --cert-name "$domain" --dry-run --run-deploy-hooks
 ```
 
 恢复 Agent 时使用原中心地址和仍有效的设备凭证。迁移到另一台主机前先停止原 Agent，避免两台主机使用同一身份。在新主机先按第 4 节安装 Agent 程序及服务单元，然后直接恢复下列文件。使用系统信任根且目标机留有旧的私有 CA 配置时，先确认是否需要保留该配置。

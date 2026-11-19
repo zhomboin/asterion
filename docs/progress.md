@@ -20,6 +20,6 @@ WSL 中中心、Agent 和采集器共 59 项测试、严格 Clippy、前端 8 �
 
 VPS 部署和在目标机器实际执行 Docker、systemd 及 Linux 账号变更仍需现场验收。Windows Host Agent 和 LocalOpsGateway 适配为可选扩展。
 
-[本地配置与启动](development.md)和[服务器部署](deployment.md)分别提供开发机启动与中心主机安装命令。服务器指南包含 Nginx 域名入口、[Let's Encrypt 自动续期](public-tls.md)和同机 Agent 自监控，实际部署参数单独保存。
+[本地配置与启动](development.md)使用开发 CA；[服务器部署](deployment.md)区分 Nginx 公网证书和同机 Agent 使用的内部 CA，包含[公网证书自动续期与验收](public-tls.md)以及迁移后的复查步骤。实际部署参数单独保存。
 
 [工程架构](architecture.md) · [采集与运维配置](monitoring-and-operations.md) · [前端设计规范](design-system.md) · [产品需求](Asterion-REQUIREMENTS.md) · [版本记录](version.md)

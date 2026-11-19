@@ -15,6 +15,8 @@
 
 ## 连接与读取
 
+服务器部署分两段 HTTPS：浏览器和远端 Agent 通过面板域名连接 Nginx，使用 Let's Encrypt 公网证书；Nginx 转发到中心的回环地址，与同机 Agent 一样使用内部 CA 校验中心。公网证书续期由 Certbot 和 Nginx 完成，不改变 Agent 身份或连接地址。见 [TLS 与设备凭证](adr/002-tls-and-credentials.md)。
+
 中心在提供 HTTPS 前加载证书、绑定监听地址、应用迁移并检查面板管理员。Linux 中心为持久 SQLite 文件持有独立锁，同一个数据库由一个中心进程使用。浏览器使用受保护的同源会话。Vite 在本地开发时通过 HTTPS 代理中心 API 和 Agent WebSocket 接入。健康检查验证中心与 SQLite 的连接。
 
 Agent 使用一次性注册凭证取得节点身份，将设备凭证保存在节点本地。之后由 Agent 主动通过 TLS WebSocket 连接中心。中心接收有效握手与心跳后更新时间戳。凭证吊销和连接换代约束同一节点上的心跳、采样及任务响应。协议 1 的 Agent 仍可注册、重连和上报心跳。协议 2 提供采样、按需读请求和经授权下发的任务。

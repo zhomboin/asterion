@@ -4,6 +4,7 @@ Asterion 是面向个人和小型基础设施的自托管监控与运维平台�
 
 - [本地配置与启动](docs/development.md)（开发电脑）
 - [服务器部署、备份与恢复](docs/deployment.md)（中心和节点服务器）
+- [公网证书：签发、自动续期与验收](docs/public-tls.md)（中心服务器的 Nginx）
 - [通过 SSH 接入服务器与重新部署 Agent](docs/ssh-enrollment.md)
 - [采集与运维配置](docs/monitoring-and-operations.md)
 - [软件安装、服务配置与容器操作](docs/managed-operations.md)
