@@ -149,32 +149,3 @@
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
-
-.deployment-log {
-  overflow: auto;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--surface-solid);
-  color: var(--ink-2);
-}
-.deployment-log > p { padding: var(--space-4); }
-.deployment-log-block {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--space-2) var(--space-4);
-  align-items: start;
-  padding: var(--space-3) var(--space-4);
-}
-.deployment-log-block + .deployment-log-block { border-top: 1px solid var(--line); }
-.deployment-log-block[data-kind="command"] { color: var(--on-inverse); background: var(--inverse); }
-.deployment-log-block[data-kind="error"] { border-inline-start: 3px solid var(--offline); }
-.deployment-log-label { font-size: var(--text-sm); }
-.deployment-log-block pre {
-  margin: 0;
-  font: var(--text-sm) / 1.6 var(--font-mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-@media (max-width: 40rem) {
-  .deployment-log-block { grid-template-columns: minmax(0, 1fr); }
-}
