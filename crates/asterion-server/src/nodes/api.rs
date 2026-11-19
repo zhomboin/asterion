@@ -68,6 +68,15 @@ pub(super) async fn create(
     body: Result<Json<NodeInput>, JsonRejection>,
 ) -> Result<(StatusCode, Json<IssuedEnrollment>), ApiError> {
     let Json(input) = body.map_err(ApiError::invalid_json)?;
+    let enrollment = register(&pool, &session.username, input).await?;
+    Ok((StatusCode::CREATED, Json(enrollment)))
+}
+
+pub(super) async fn register(
+    pool: &SqlitePool,
+    actor: &str,
+    input: NodeInput,
+) -> Result<IssuedEnrollment, ApiError> {
     let input = input.validate()?;
     let id = random_hex::<16>()?;
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -89,9 +98,9 @@ pub(super) async fn create(
     .await?;
 
     let enrollment = credentials::issue(&mut tx, &id).await?;
-    model::audit(&mut tx, &session.username, &id, "node_create").await?;
+    model::audit(&mut tx, actor, &id, "node_create").await?;
     tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(enrollment)))
+    Ok(enrollment)
 }
 
 pub(super) async fn update(

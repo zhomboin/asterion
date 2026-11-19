@@ -4,6 +4,7 @@ mod error;
 mod hosts;
 mod model;
 mod socket;
+mod ssh;
 mod stream;
 
 #[cfg(test)]
@@ -20,6 +21,7 @@ use sqlx::SqlitePool;
 use tokio::sync::watch;
 
 pub fn routes(shutdown: watch::Receiver<bool>) -> Router<SqlitePool> {
+    let shutdown_for_ssh = shutdown.clone();
     let agent = Router::new()
         .route(AGENT_CONNECT_PATH, get(socket::connect))
         .layer(Extension(shutdown));
@@ -34,5 +36,6 @@ pub fn routes(shutdown: watch::Receiver<bool>) -> Router<SqlitePool> {
         .route("/api/v1/nodes/{id}/enrollment-token", post(api::issue))
         .route("/api/v1/nodes/{id}/credentials", delete(api::revoke))
         .layer(DefaultBodyLimit::max(8192))
+        .merge(ssh::routes(shutdown_for_ssh))
         .merge(agent)
 }

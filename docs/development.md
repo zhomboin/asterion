@@ -146,7 +146,28 @@ ASTERION_WEB_DIR="$PWD/web/dist" cargo +stable run --locked -p asterion-server
 
 ## 5. 注册一个本地 Agent
 
-在面板打开「节点 → 接入服务器」，选择 WSL 并生成一次性注册凭证。弹窗提供连接配置和接入步骤。若 Agent 与中心均在同一个 WSL 环境，可使用下面命令中的中心地址。注册凭证有效期为 10 分钟。为每个 Agent 使用独立的身份目录。
+验证「接入服务器」的 SSH 部署流程，在 WSL Bash 运行下面的定向检查。回环用例使用一次性 SSH 密钥和不执行系统命令的测试服务；结束后释放连接。要从面板完整试装，使用可恢复的独立虚拟机，按[中心设置和接入步骤](ssh-enrollment.md)启用部署。用测试节点能访问的 HTTPS 地址启动中心；不需要开放 Agent 入站端口。
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-paramiko
+cargo +stable build --locked -p asterion-agent --bin asterion-agent
+cargo +stable test --locked -p asterion-server --lib nodes::
+/usr/bin/python3 -B -m unittest discover -s deploy/ssh-enrollment -v
+npm --prefix web run check
+```
+
+在本地启用该入口时，在启动中心的同一终端设置下列变量。目标为另一台虚拟机时，中心应监听该机可达的私网接口；中心 TLS 证书必须含实际使用的域名或 IP。
+
+```bash
+export ASTERION_SSH_DEPLOY_AGENT="$PWD/target/debug/asterion-agent"
+export ASTERION_SSH_DEPLOY_NETWORKS='<测试目标的 CIDR>'
+export ASTERION_SSH_DEPLOY_CENTER_URL='https://<目标能访问的中心主机>:<端口>'
+export ASTERION_SSH_DEPLOY_CA_FILE="$PWD/.local/tls/ca.crt"
+export ASTERION_LISTEN_ADDR='<中心私网监听地址>:<端口>'
+```
+
+手动接入时，在面板打开「节点 → 接入服务器 → 手动接入」，选择 WSL 并生成一次性注册凭证。弹窗提供连接配置和接入步骤。若 Agent 与中心均在同一个 WSL 环境，可使用下面命令中的中心地址。注册凭证有效期为 10 分钟。为每个 Agent 使用独立的身份目录。
 
 ```bash
 install -d -m 0700 .local/agent-wsl

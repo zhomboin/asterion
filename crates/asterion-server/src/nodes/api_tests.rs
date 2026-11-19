@@ -94,6 +94,41 @@ async fn node_management_requires_a_session_and_preserves_partial_updates() {
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
     let session = admin_cookie(&pool, &router).await;
     let cookie = Some(session.as_str());
+    assert_eq!(
+        request(
+            &router,
+            "GET",
+            "/api/v1/nodes/ssh/capability",
+            None,
+            false,
+            Value::Null
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            &router,
+            "GET",
+            "/api/v1/nodes/ssh/capability",
+            cookie,
+            false,
+            Value::Null
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    for operation in ["inspect", "deploy"] {
+        let path = format!("/api/v1/nodes/ssh/{operation}");
+        assert_eq!(
+            request(&router, "POST", &path, cookie, false, json!({}))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
     let node = json!({"name": "工作节点", "kind": "wsl", "tags": ["测试"], "notes": "测试节点"});
 
     let path = "/api/v1/nodes/enrollment-token";

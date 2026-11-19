@@ -17,6 +17,13 @@ struct ErrorBody {
 }
 
 impl ApiError {
+    pub(super) fn deployment(status: StatusCode, message: &'static str) -> Self {
+        Self {
+            status,
+            code: "ssh_deployment",
+            message,
+        }
+    }
     pub const INVALID_INPUT: Self = Self {
         status: StatusCode::BAD_REQUEST,
         code: "invalid_node_input",
