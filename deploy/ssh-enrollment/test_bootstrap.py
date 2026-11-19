@@ -75,7 +75,12 @@ def endpoint(peer, server_key):
             sock, _ = listener.accept()
             with sock, contextlib.closing(paramiko.Transport(sock)) as transport:
                 transport.add_server_key(server_key)
-                transport.start_server(server=peer)
+                try:
+                    transport.start_server(server=peer)
+                except (EOFError, ConnectionResetError):
+                    # Fingerprint inspection can disconnect as soon as key exchange completes.
+                    peer.disconnected.set()
+                    return
                 while transport.is_active():
                     channel = transport.accept(.1)
                     if channel is not None:

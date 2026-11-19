@@ -1,9 +1,9 @@
 mod worker;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::StatusCode;
@@ -22,6 +22,7 @@ type Owner = [u8; 32];
 struct Prepared {
     owner: Owner,
     target: Target,
+    reinstall: bool,
     plan: Plan,
     at: Instant,
 }
@@ -37,11 +38,13 @@ struct Job {
     node: String,
     state: &'static str,
     lines: Vec<String>,
+    finished_at: Option<i64>,
     at: Instant,
 }
 struct Hub {
     plans: Mutex<HashMap<String, Prepared>>,
     jobs: Mutex<HashMap<String, Job>>,
+    active_nodes: Mutex<HashSet<String>>,
     slots: Arc<Semaphore>,
     shutdown: watch::Receiver<bool>,
 }
@@ -50,6 +53,7 @@ pub(super) fn routes(shutdown: watch::Receiver<bool>) -> Router<SqlitePool> {
     let hub = Hub {
         plans: Mutex::default(),
         jobs: Mutex::default(),
+        active_nodes: Mutex::default(),
         slots: Arc::new(Semaphore::new(2)),
         shutdown,
     };
@@ -83,6 +87,41 @@ struct Target {
     host: String,
     port: u16,
     user: String,
+    node_id: Option<String>,
+}
+
+struct NodeReservation(Arc<Hub>, String);
+impl NodeReservation {
+    fn acquire(hub: &Arc<Hub>, id: &str) -> Result<Self, ApiError> {
+        if !hub.active_nodes.lock().unwrap().insert(id.to_owned()) {
+            return Err(ApiError::BUSY);
+        }
+        Ok(Self(hub.clone(), id.to_owned()))
+    }
+}
+impl Drop for NodeReservation {
+    fn drop(&mut self) {
+        self.0.active_nodes.lock().unwrap().remove(&self.1);
+    }
+}
+
+async fn enrolled(conn: &mut sqlx::SqliteConnection, id: &str) -> Result<bool, ApiError> {
+    super::model::check_id(id)?;
+    let (seen, valid) = sqlx::query_as::<_, (bool, bool)>(
+        "SELECT last_seen_at IS NOT NULL, EXISTS(SELECT 1 FROM agent_credentials
+         WHERE node_id=nodes.id AND revoked_at IS NULL) FROM nodes WHERE id=?",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await?
+    .ok_or(ApiError::NOT_FOUND)?;
+    if seen && !valid {
+        return Err(ApiError::deployment(
+            StatusCode::CONFLICT,
+            "节点身份已吊销，请使用手动接入换发凭证",
+        ));
+    }
+    Ok(valid)
 }
 impl Target {
     fn valid(&self) -> bool {
@@ -111,6 +150,7 @@ impl Target {
 async fn inspect(
     _: Csrf,
     session: AdminSession,
+    State(pool): State<SqlitePool>,
     Extension(hub): Extension<Arc<Hub>>,
     Json(target): Json<Target>,
 ) -> Result<Json<Value>, ApiError> {
@@ -119,8 +159,13 @@ async fn inspect(
         return Err(ApiError::INVALID_INPUT);
     }
     let _permit = hub.slots.try_acquire().map_err(|_| ApiError::BUSY)?;
+    let reinstall = if let Some(id) = &target.node_id {
+        enrolled(&mut *pool.acquire().await?, id).await?
+    } else {
+        false
+    };
     let mut plan = None;
-    let result = worker::call(json!({"mode":"inspect","host":target.host,"port":target.port,"user":target.user,"unit":UNIT}),
+    let result = worker::call(json!({"mode":"inspect","host":target.host,"port":target.port,"user":target.user,"unit":UNIT,"reinstall":reinstall.then_some(&target.node_id)}),
         Duration::from_secs(10), hub.shutdown.clone(), |value| {
             plan = Some(serde_json::from_value::<Plan>(value).map_err(|_| "无法解析部署计划")?); Ok(())
         }).await;
@@ -140,6 +185,7 @@ async fn inspect(
         Prepared {
             owner: *session.binding(),
             target,
+            reinstall,
             plan,
             at: Instant::now(),
         },
@@ -152,7 +198,7 @@ async fn inspect(
 struct Start {
     ticket: String,
     fingerprint: String,
-    node: NodeInput,
+    node: Option<NodeInput>,
     method: String,
     secret: String,
     passphrase: Option<String>,
@@ -166,7 +212,7 @@ async fn start(
     Json(start): Json<Start>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     available()?;
-    let node = start.node.validate()?;
+    let node = start.node.map(NodeInput::validate).transpose()?;
     if start.secret.is_empty()
         || start.secret.len() > 32768
         || !matches!(start.method.as_str(), "password" | "key")
@@ -203,25 +249,54 @@ async fn start(
             return Err(ApiError::BUSY);
         }
     }
-    let enrollment = api::register(&pool, &session.username, node).await?;
+    let (node_id, token, reservation) = match (&prepared.target.node_id, node) {
+        (None, Some(input)) => {
+            let new_node = credentials::random_hex::<16>()?;
+            let reservation = NodeReservation::acquire(&hub, &new_node)?;
+            let enrollment = api::register(&pool, &session.username, input, new_node).await?;
+            (enrollment.node_id, Some(enrollment.token), reservation)
+        }
+        (Some(id), None) => {
+            let reservation = NodeReservation::acquire(&hub, id)?;
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+            if enrolled(&mut tx, id).await? != prepared.reinstall {
+                return Err(ApiError::deployment(
+                    StatusCode::CONFLICT,
+                    "节点接入状态已变化，请重新核对",
+                ));
+            }
+            let token = if prepared.reinstall {
+                None
+            } else {
+                let token = credentials::issue(&mut tx, id).await?.token;
+                super::model::audit(&mut tx, &session.username, id, "enrollment_issue").await?;
+                Some(token)
+            };
+            tx.commit().await?;
+            (id.clone(), token, reservation)
+        }
+        _ => return Err(ApiError::INVALID_INPUT),
+    };
     let target = prepared.target;
-    tracing::info!(action="ssh_agent_deploy", actor=%session.username, node_id=%enrollment.node_id, job_id=%id, "已确认首次 SSH 部署");
+    tracing::info!(action="ssh_agent_deploy", actor=%session.username, node_id=%node_id, job_id=%id, "已确认 SSH 部署");
     let payload = json!({"mode":"deploy","host":target.host,"port":target.port,"user":target.user,
         "address":prepared.plan.address, "fingerprint":prepared.plan.fingerprint,"manifest":prepared.plan.manifest,
-        "method":start.method,"secret":start.secret,"passphrase":start.passphrase,"unit":UNIT,"token":enrollment.token});
-    let response = json!({"id":id,"node_id":enrollment.node_id});
+        "method":start.method,"secret":start.secret,"passphrase":start.passphrase,"unit":UNIT,"token":token,"reinstall":prepared.reinstall.then_some(&node_id)});
+    let response = json!({"id":id,"node_id":node_id});
     hub.jobs.lock().unwrap().insert(
         id.clone(),
         Job {
             owner: *session.binding(),
-            node: enrollment.node_id.clone(),
+            node: node_id.clone(),
             state: "running",
             lines: Vec::new(),
+            finished_at: None,
             at: Instant::now(),
         },
     );
     tokio::spawn(async move {
         let _permit = permit;
+        let _reservation = reservation;
         let result = worker::call(
             payload,
             Duration::from_secs(180),
@@ -238,14 +313,22 @@ async fn start(
             },
         )
         .await;
-        if result.is_err() {
+        if let (Err(_), Some(token)) = (&result, token) {
             let _ = sqlx::query("UPDATE node_enrollment_tokens SET revoked_at=unixepoch() WHERE node_id=? AND consumed_at IS NULL AND fingerprint=?")
-                .bind(&enrollment.node_id).bind({ use sha2::{Digest,Sha256}; Sha256::digest(enrollment.token.as_bytes()).to_vec() })
+                .bind(&node_id).bind({ use sha2::{Digest,Sha256}; Sha256::digest(token.as_bytes()).to_vec() })
                 .execute(&pool).await;
         }
         if let Some(job) = hub.jobs.lock().unwrap().get_mut(&id) {
             match result {
-                Ok(()) => job.state = "deployed",
+                Ok(()) => {
+                    job.state = "deployed";
+                    job.finished_at = Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64,
+                    );
+                }
                 Err(message) => {
                     job.lines.push(message);
                     job.state = "failed";
@@ -266,7 +349,7 @@ async fn status(
     Extension(hub): Extension<Arc<Hub>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let (node, state, lines) = {
+    let (node, state, lines, finished_at) = {
         let jobs = hub.jobs.lock().unwrap();
         let job = jobs
             .get(&id)
@@ -274,10 +357,15 @@ async fn status(
                 job.owner == *session.binding() && job.at.elapsed() < Duration::from_secs(1800)
             })
             .ok_or(ApiError::NOT_FOUND)?;
-        (job.node.clone(), job.state, job.lines.clone())
+        (
+            job.node.clone(),
+            job.state,
+            job.lines.clone(),
+            job.finished_at,
+        )
     };
-    let heartbeat = sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM nodes n JOIN node_enrollment_tokens t ON t.node_id=n.id JOIN agent_credentials a ON a.node_id=n.id AND a.revoked_at IS NULL WHERE n.id=? AND n.last_seen_at > t.consumed_at AND n.last_seen_at > unixepoch()-?)")
-        .bind(&node).bind(asterion_protocol::HEARTBEAT_TIMEOUT_SECS as i64).fetch_one(&pool).await?;
+    let heartbeat = sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM nodes n JOIN agent_credentials a ON a.node_id=n.id AND a.revoked_at IS NULL WHERE n.id=? AND n.last_seen_at > ? AND n.last_seen_at > unixepoch()-?)")
+        .bind(&node).bind(finished_at).bind(asterion_protocol::HEARTBEAT_TIMEOUT_SECS as i64).fetch_one(&pool).await?;
     Ok(Json(
         json!({"state":state, "lines":lines, "heartbeat":heartbeat, "node_id":node}),
     ))

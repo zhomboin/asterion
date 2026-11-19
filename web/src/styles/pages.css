@@ -136,3 +136,16 @@
   .trend { padding: var(--space-4) var(--space-3) var(--space-2); }
   .trend svg { height: clamp(7.2rem, 35vw, 8.5rem); }
 }
+.node-configuration.stage-card {
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+.node-configuration .fields { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.node-configuration .deployment-output {
+  min-height: min(20rem, 45vh);
+  max-height: 65vh;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
