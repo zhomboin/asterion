@@ -238,15 +238,11 @@ UNIT
 printf '面板用户名：%s-panel\n' "$ops"
 ```
 
-为面板域名准备 的受信任证书。已有证书时，将下面两个变量填为服务器上的完整证书链和私钥路径。默认路径对应 Certbot，首次签发使用 DNS-01。根据提示添加 `_acme-challenge.$domain` 的 TXT 记录，待 DNS 生效后再继续。签发过程无需新增低端口监听。[Certbot DNS 验证说明](https://eff-certbot.readthedocs.io/en/stable/using.html#manual)
+在同一 root Bash 中，先按 [Let's Encrypt 公网证书](public-tls.md)签发面板域名证书并启用自动续期，再继续启动中心。Nginx 直接引用 Certbot 管理的证书路径。回环连接使用本节生成的内部 CA。
 
 ```bash
 public_chain="/etc/letsencrypt/live/$domain/fullchain.pem"
 public_key="/etc/letsencrypt/live/$domain/privkey.pem"
-if [[ ! -s "$public_chain" || ! -s "$public_key" ]]; then
-  apt-get install -y certbot
-  certbot certonly --manual --preferred-challenges dns --cert-name "$domain" -d "$domain"
-fi
 test -s "$public_chain"
 test -s "$public_key"
 openssl verify -purpose sslserver -verify_hostname "$domain" \
@@ -264,7 +260,7 @@ curl --noproxy '*' --retry 8 --retry-connrefused --retry-delay 1 -fsS \
   --cacert /etc/asterion/deploy-ca.crt https://127.0.0.1:$app_port/healthz
 ```
 
-下面按同机 Ubuntu Nginx 的 `http` 配置已包含 `/etc/nginx/conf.d/*.conf` 编写。已有该域名站点时，将 `map` 放在 `http` 级，合并 `server` 中的代理、域名检查与访问控制到现有站点，沿用其证书路径。新站点可直接执行下列命令。公网登录、API 和 Agent WebSocket 共用同一域名，代理到中心时校验证书。[Nginx WebSocket 配置](https://nginx.org/en/docs/http/websocket.html) · [上游 TLS 校验](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_ssl_verify)
+下面按同机 Ubuntu Nginx 的 `http` 配置已包含 `/etc/nginx/conf.d/*.conf` 编写。已有该域名站点时，将 `map` 放在 `http` 级，把 `server` 中的证书路径、代理、域名检查与访问控制合并到现有站点。新站点可直接执行下列命令。公网登录、API 和 Agent WebSocket 共用同一域名，代理到中心时校验证书。[Nginx WebSocket 配置](https://nginx.org/en/docs/http/websocket.html) · [上游 TLS 校验](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_ssl_verify)
 
 ```bash
 site_file=/etc/nginx/conf.d/$domain.conf
@@ -320,7 +316,7 @@ fi
 curl --noproxy '*' --resolve "$domain:443:127.0.0.1" -fsS "https://$domain/healthz"
 ```
 
-如果使用 Certbot 手动 DNS 验证，需要在证书到期前重新运行 `certbot certonly --manual --preferred-challenges dns --cert-name "$domain" -d "$domain"` 并完成 TXT 验证。证书更新成功后执行 `nginx -t && systemctl reload nginx` 载入新证书。使用 DNS 提供商自动续签工具时，将检查和重载设为续签成功后的钩子。
+已有域名站点时，也将该站点的 `ssl_certificate` 和 `ssl_certificate_key` 指向上述 Certbot 路径，检查并重载 Nginx。通过[证书验收](public-tls.md#验证-nginx-实际提供的证书)核对域名当前使用的证书。
 
 ### 安装并注册监控中心自身的 Agent
 
