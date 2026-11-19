@@ -2,86 +2,37 @@
 
 本文的 Bash 命令在服务器上执行。中心主机运行 Asterion、SQLite 和监控自身的 Agent。同机已有的 Nginx 负责域名 HTTPS 入口，Asterion 只监听回环地址。远端 Agent 通过域名上报；部署 SSH 会话结束后即可断开。首次安装流程面向 Ubuntu 24.04 和 systemd。
 
-## 1. 在中心服务器准备发布包
+## 一键初始化中心
 
-已取得包含 `deploy/self_monitor.py` 的可信发布包和对应 SHA-256 校验文件时，将两者放到中心安装管理员的家目录，直接进入第 2 节。从源码部署时，登录中心服务器，以普通用户执行本节，选择已检视的标签或提交。构建环境须与运行中心及 Agent 的目标系统架构和运行库兼容。
-
-```bash
-set -euo pipefail
-sudo apt-get update
-sudo apt-get install -y build-essential ca-certificates curl git openssl pkg-config xz-utils
-repo_url='<项目仓库 SSH 或 HTTPS 地址>'
-revision='<发布标签或提交号>'
-src_dir=$(mktemp -d "$HOME/asterion-src.XXXXXXXX")
-git clone "$repo_url" "$src_dir"
-cd "$src_dir"
-git checkout --detach "$revision"
-mkdir -p .local
-work=$(mktemp -d "$PWD/.local/build.XXXXXXXX")
-```
-
-准备 Rust stable 和 Linux 版 Node.js 24。已安装这两个工具链时，直接执行构建段。
+在中心服务器上准备可信的项目检出目录，从该目录用有 sudo 权限的普通用户运行：
 
 ```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-if ! command -v rustup >/dev/null; then
-  curl --proto '=https' --tlsv1.2 -fsSLo "$work/rustup-init.sh" https://sh.rustup.rs
-  sh "$work/rustup-init.sh" -y --profile minimal --default-toolchain stable --no-modify-path
-fi
-rustup toolchain install stable --profile minimal
-if ! node -e 'process.exit(process.platform==="linux" && process.versions.node.split(".")[0]==="24" ? 0 : 1)' 2>/dev/null; then
-  case "$(uname -m)" in
-    x86_64) arch=x64 ;;
-    aarch64) arch=arm64 ;;
-    *) echo '需要对应架构的 Linux 版 Node.js 24'; exit 1 ;;
-  esac
-  (
-    cd "$work"
-    curl -fsSLo hashes https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt
-    pkg=$(awk -v pat="-linux-$arch.tar.xz" 'substr($2,length($2)-length(pat)+1)==pat {print $2; exit}' hashes)
-    test -n "$pkg"
-    version=${pkg#node-}
-    version=${version%%-linux-*}
-    curl -fsSLo "$pkg" "https://nodejs.org/dist/$version/$pkg"
-    awk -v file="$pkg" '$2==file' hashes | sha256sum -c -
-    mkdir node-tools
-    tar -xf "$pkg" --strip-components=1 -C node-tools
-  )
-  export PATH="$work/node-tools/bin:$PATH"
-fi
-node --version
-npm --version
+bash deploy/install-center.sh
 ```
 
-在源码目录构建生产前端、中心、Agent 和可选运维程序。保留输出的构建编号，后续安装和升级使用相应归档。
+目标系统为使用 systemd 的 Ubuntu 24.04。将面板域名的 A 记录指向中心 IPv4，使用 DNS 直连，并允许管理电脑访问 HTTPS 入口。向导会安装依赖和 Nginx，从当前提交构建前端、中心及 Agent，校验发布包，再配置证书、账号和服务。已有同域名 Nginx 站点时，向导会提示冲突；自定义站点可使用下方第 2、3 节的合并步骤。
+
+按提示输入域名、回环端口、管理电脑的出口 IPv4、新运维用户名和 SSH **公钥**。只部署中心时，远端节点 IPv4 可留空；要同时允许向一个节点部署 Agent，可填写该节点地址及其访问中心的出口地址。运维账号的 sudo 权限限于重启中心和读取最近 100 行日志。面板用户名为 `<运维用户名>-panel`。
+
+准备面板口令和内部 CA 私钥口令，分别用于登录及日后续签。新签公网证书还需要 Let's Encrypt 邮箱和该域名所在 Cloudflare 区域的 DNS 编辑令牌。口令与令牌均隐藏输入。已有同名且配置了续期的 Certbot 证书时，向导会检查并复用。实际参数保存在中心的受保护目录。
+
+看到“部署完成”即可打开输出的登录地址。此时向导已验证回环和 Nginx 域名入口的健康响应、Certbot 模拟续期，以及本机 Agent 使用持久身份重连后上报的新指标。外部 DNS 和防火墙可从管理电脑通过实际登录验收。执行中断时，修复报错原因后用原命令、原归档和已设置的面板口令重试。已有中心的版本更新见第 7 节。
+
+## 1. 单独准备或使用发布包
+
+一键初始化会自动构建或复用构建账号家目录中与当前提交对应的归档。需要在同架构的 Ubuntu 构建机预先打包，或只为升级和远端 Agent 准备发布包时，在源码目录运行：
 
 ```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-export CARGO_TARGET_DIR="$PWD/target"
-release_id=$(git rev-parse --short=12 HEAD)
-archive="asterion-$release_id.tar.gz"
-stage="$work/release"
-npm --prefix web ci
-npm --prefix web run build
-cargo +stable build --locked --release --workspace
-install -Dm755 "$CARGO_TARGET_DIR/release/asterion-server" "$stage/bin/asterion-server"
-install -Dm755 "$CARGO_TARGET_DIR/release/asterion-agent" "$stage/bin/asterion-agent"
-for helper in asterion-docker-reader asterion-docker-operator asterion-account-operator asterion-terminal-helper; do
-  install -Dm755 "$CARGO_TARGET_DIR/release/$helper" "$stage/bin/$helper"
-done
-install -d "$stage/web" "$stage/deploy"
-cp -a web/dist/. "$stage/web/"
-install -m 0644 deploy/*.service deploy/*.env.example deploy/*.example.json "$stage/deploy/"
-install -m 0644 deploy/self_monitor.py "$stage/deploy/"
-install -d "$stage/deploy/managed"
-install -m 0644 deploy/managed/{service,common,containers,console,host}.py "$stage/deploy/managed/"
-tar -C "$stage" -czf "$HOME/$archive" bin web deploy
-(
-  cd "$HOME"
-  sha256sum "$archive" > "$archive.sha256"
-)
-printf '构建编号：%s\n' "$release_id"
+bash deploy/build-release.sh
 ```
+
+将生成的 `asterion-<构建编号>.tar.gz` 及同目录的 `.tar.gz.sha256` 从可信来源复制到中心。使用与发行版本配套的安装脚本，在项目目录执行以下一条命令即可跳过编译。此模式也支持 root 账号。
+
+```bash
+bash deploy/install-center.sh "$HOME/asterion-<构建编号>.tar.gz"
+```
+
+以下第 2、3 节供逐步部署、自定义已有站点和恢复时查阅。一键安装成功后，可直接从第 4 节接入远端节点。
 
 ## 2. 配置服务器与个人运维用户
 

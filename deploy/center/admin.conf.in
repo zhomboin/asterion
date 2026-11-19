@@ -1,0 +1,7 @@
+[Service]
+LoadCredential=admin-password:/run/asterion-first-admin
+RuntimeDirectory=asterion-bootstrap
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/install -m 0600 %d/admin-password /run/asterion-bootstrap/admin-password
+Environment=ASTERION_ADMIN_USERNAME=@ops@-panel
+Environment=ASTERION_ADMIN_PASSWORD_FILE=/run/asterion-bootstrap/admin-password

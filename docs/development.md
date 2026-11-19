@@ -198,6 +198,14 @@ cargo +stable run --locked -p asterion-agent
 
 ## 6. 检查改动
 
+修改中心安装器时，在 WSL 工作区运行以下定向检查。测试使用临时目录和模拟系统命令，实际服务器安装见[一键初始化中心](deployment.md#一键初始化中心)。
+
+```bash
+bash -n deploy/install-center.sh
+bash -n deploy/build-release.sh
+python3 -B -m unittest discover -s deploy/center -v
+```
+
 根据改动范围运行对应检查。提交前格式化改动，完整检查在 GitHub Actions 运行。
 
 ```bash

@@ -1,5 +1,7 @@
 # Let's Encrypt 公网证书与自动续期
 
+[一键初始化中心](deployment.md#一键初始化中心)会签发或复用证书、启用定时器并验证模拟续期。本页供单独签发、迁移及日常维护时使用。
+
 在中心服务器的 root Bash 中执行。首次安装时沿用[服务器部署第 2 节](deployment.md#2-配置服务器与个人运维用户)设置的 `domain`。已部署的中心可单独执行本页，先把 `domain` 设为实际面板域名。以下命令适用于 Ubuntu 24.04、已运行的 Nginx 和由 Cloudflare 托管的权威 DNS。其他 DNS 服务商需选用对应的 Certbot DNS 插件和凭据格式。DNS-01 通过公网 DNS 的 TXT 记录完成验证，无需开放新的入站端口。[Let's Encrypt 验证方式](https://letsencrypt.org/docs/challenge-types/) · [Certbot DNS 插件](https://eff-certbot.readthedocs.io/en/stable/using.html#dns-plugins)
 
 ## 准备 DNS 授权
