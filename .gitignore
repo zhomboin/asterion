@@ -2,6 +2,14 @@
 /web/node_modules/
 /web/dist/
 /.local/
+*.srl
+*.key
+*.pem
+*.crt
+*.csr
+*.p12
+*.pfx
+*.env
 .env
 .env.*
 *.db

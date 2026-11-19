@@ -1,4 +1,6 @@
-# 本地开发
+# 本地配置与启动
+
+本页在开发电脑上准备工具、创建开发证书、启动中心与前端，并验证本机 Agent。使用仓库忽略的 `.local/` 保存个人配置、口令、证书及测试数据。需要安装常驻服务时，请使用[服务器部署](deployment.md)。
 
 在 Windows PowerShell 中运行 `wsl -d Ubuntu`。进入 WSL 后，将以下命令中的目录占位符替换为自己的 Asterion 工作区。后续命令均在 WSL Ubuntu 的 Bash 中执行。
 
@@ -70,7 +72,7 @@ npm --version
   openssl req -new -newkey rsa:2048 -nodes -sha256 -subj '/CN=localhost' \
     -keyout .local/tls/center.key -out .local/tls/center.csr
   openssl x509 -req -sha256 -days 30 -CA .local/tls/ca.crt -CAkey .local/tls/ca.key \
-    -CAcreateserial -in .local/tls/center.csr -out .local/tls/center.crt \
+    -CAserial .local/tls/ca.srl -CAcreateserial -in .local/tls/center.csr -out .local/tls/center.crt \
     -extfile <(printf '%s\n' 'basicConstraints=critical,CA:FALSE' \
       'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' \
       'subjectAltName=DNS:localhost,IP:127.0.0.1')
@@ -223,3 +225,16 @@ python3 scripts/dependency_licenses.py > .local/dependency-licenses.tsv
 ```
 
 GitHub Actions 检查 Rust 和 Web，并生成锁定依赖的许可证清单。开发完毕后在各运行终端按 `Ctrl+C` 停止临时中心、Agent、Web 和可选采集服务。
+
+## 8. 准备个人运维公钥（可选）
+
+服务器安装需要你的 SSH 公钥时，可在此工作区生成一对独立的密钥，输入私钥口令。将最后一行输出的公钥交给服务器管理员。
+
+```bash
+install -d -m 0700 .local/ssh
+if ! test -e .local/ssh/ops-key && ! test -e .local/ssh/ops-key.pub; then
+  ssh-keygen -t ed25519 -a 64 -f .local/ssh/ops-key
+fi
+ssh-keygen -lf .local/ssh/ops-key.pub
+cat .local/ssh/ops-key.pub
+```

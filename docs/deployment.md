@@ -1,123 +1,416 @@
-# Ubuntu 远程部署
+# Ubuntu 服务器部署
 
-中心和 Agent 使用 systemd 运行。每个持久 SQLite 文件只由一个中心进程使用。中心在回环地址或私有网络地址上提供 HTTPS。浏览器和 Agent 使用证书中的域名或 IP 访问，Agent 只发起出站连接。以下构建命令在 WSL Ubuntu 的 Bash 中执行，安装命令在各自目标 Ubuntu 的 Bash 中执行。所有带尖括号的值都应替换为实际配置，保存在 Git 之外。
+本文的 Bash 命令在服务器上执行。中心主机运行 Asterion、SQLite 和监控自身的 Agent。同机已有的 Nginx 负责域名 HTTPS 入口，Asterion 只监听回环地址。远端 Agent 通过域名上报；部署 SSH 会话结束后即可断开。首次安装流程面向 Ubuntu 24.04 和 systemd。
 
-## 1. 构建和上传发布包
+## 1. 在中心服务器准备发布包
 
-按[本地开发](development.md#1-准备工具)安装构建工具。在项目根目录构建。构建环境须与目标机的 CPU 架构和系统运行库兼容。为每个发布包选择唯一的构建编号。
+已取得包含 `deploy/self_monitor.py` 的可信发布包和对应 SHA-256 校验文件时，将两者放到中心安装管理员的家目录，直接进入第 2 节。从源码部署时，登录中心服务器，以普通用户执行本节，选择已检视的标签或提交。构建环境须与运行中心及 Agent 的目标系统架构和运行库兼容。
 
 ```bash
-release_id='<构建编号>'
-target='<SSH用户>@<SSH主机>'
-stage=".local/asterion-$release_id"
+set -euo pipefail
+sudo apt-get update
+sudo apt-get install -y build-essential ca-certificates curl git openssl pkg-config xz-utils
+repo_url='<项目仓库 SSH 或 HTTPS 地址>'
+revision='<发布标签或提交号>'
+src_dir=$(mktemp -d "$HOME/asterion-src.XXXXXXXX")
+git clone "$repo_url" "$src_dir"
+cd "$src_dir"
+git checkout --detach "$revision"
+mkdir -p .local
+work=$(mktemp -d "$PWD/.local/build.XXXXXXXX")
+```
+
+准备 Rust stable 和 Linux 版 Node.js 24。已安装这两个工具链时，直接执行构建段。
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+if ! command -v rustup >/dev/null; then
+  curl --proto '=https' --tlsv1.2 -fsSLo "$work/rustup-init.sh" https://sh.rustup.rs
+  sh "$work/rustup-init.sh" -y --profile minimal --default-toolchain stable --no-modify-path
+fi
+rustup toolchain install stable --profile minimal
+if ! node -e 'process.exit(process.platform==="linux" && process.versions.node.split(".")[0]==="24" ? 0 : 1)' 2>/dev/null; then
+  case "$(uname -m)" in
+    x86_64) arch=x64 ;;
+    aarch64) arch=arm64 ;;
+    *) echo '需要对应架构的 Linux 版 Node.js 24'; exit 1 ;;
+  esac
+  (
+    cd "$work"
+    curl -fsSLo hashes https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt
+    pkg=$(awk -v pat="-linux-$arch.tar.xz" 'substr($2,length($2)-length(pat)+1)==pat {print $2; exit}' hashes)
+    test -n "$pkg"
+    version=${pkg#node-}
+    version=${version%%-linux-*}
+    curl -fsSLo "$pkg" "https://nodejs.org/dist/$version/$pkg"
+    awk -v file="$pkg" '$2==file' hashes | sha256sum -c -
+    mkdir node-tools
+    tar -xf "$pkg" --strip-components=1 -C node-tools
+  )
+  export PATH="$work/node-tools/bin:$PATH"
+fi
+node --version
+npm --version
+```
+
+在源码目录构建生产前端、中心、Agent 和可选运维程序。保留输出的构建编号，后续安装和升级使用相应归档。
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+export CARGO_TARGET_DIR="$PWD/target"
+release_id=$(git rev-parse --short=12 HEAD)
+archive="asterion-$release_id.tar.gz"
+stage="$work/release"
 npm --prefix web ci
 npm --prefix web run build
 cargo +stable build --locked --release --workspace
-install -Dm755 target/release/asterion-server "$stage/bin/asterion-server"
-install -Dm755 target/release/asterion-agent "$stage/bin/asterion-agent"
+install -Dm755 "$CARGO_TARGET_DIR/release/asterion-server" "$stage/bin/asterion-server"
+install -Dm755 "$CARGO_TARGET_DIR/release/asterion-agent" "$stage/bin/asterion-agent"
 for helper in asterion-docker-reader asterion-docker-operator asterion-account-operator asterion-terminal-helper; do
-  install -Dm755 "target/release/$helper" "$stage/bin/$helper"
+  install -Dm755 "$CARGO_TARGET_DIR/release/$helper" "$stage/bin/$helper"
 done
 install -d "$stage/web" "$stage/deploy"
 cp -a web/dist/. "$stage/web/"
 install -m 0644 deploy/*.service deploy/*.env.example deploy/*.example.json "$stage/deploy/"
+install -m 0644 deploy/self_monitor.py "$stage/deploy/"
 install -d "$stage/deploy/managed"
 install -m 0644 deploy/managed/{service,common,containers,console,host}.py "$stage/deploy/managed/"
-tar -C "$stage" -czf ".local/asterion-$release_id.tar.gz" bin web deploy
+tar -C "$stage" -czf "$HOME/$archive" bin web deploy
 (
-  cd .local
-  sha256sum "asterion-$release_id.tar.gz" > "asterion-$release_id.tar.gz.sha256"
+  cd "$HOME"
+  sha256sum "$archive" > "$archive.sha256"
 )
-scp ".local/asterion-$release_id.tar.gz" ".local/asterion-$release_id.tar.gz.sha256" "$target:"
-ssh "$target"
+printf '构建编号：%s\n' "$release_id"
 ```
 
-使用 SSH 一键接入时，只向中心上传发布包。选择手动接入时，向每台 Agent 主机上传同一发布包和校验文件。
+## 2. 配置服务器与个人运维用户
 
-## 2. 安装中心和准备 TLS
+在 DNS 中将面板域名的 A 记录指向中心公网 IPv4。域名复用同机 Nginx 已有的 HTTPS 入口。管理电脑和远端 Agent 的出口地址可以访问此站点，云防火墙沿用现有 HTTPS 和 SSH 策略。内部监听端口选择空闲的高端口。
 
-在中心主机安装验证和备份工具，并验证上传文件。使用证书链 PEM 文件和对应的未加密私钥 PEM 文件。证书须包含客户端访问时使用的域名或 IP。
+首次安装从中心管理员账号的家目录开始。运行以下命令进入 root Bash，后续配置和验收在这个会话中完成。私钥、证书、数据库和实际部署参数放在服务器私有目录。仓库中的样例保留占位符，本机留存的实际配置可放在 Git 忽略的 `.local/` 目录。
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl openssl sqlite3
 cd "$HOME"
-release_id='<同一个构建编号>'
+sudo bash
+```
+
+填入自己的参数。如使用个人配置说明中的参数块，可直接代入下方同名变量。
+
+```bash
+set -euo pipefail
+release_id='<构建编号>'
+domain='<面板域名>'
+app_port='<内部监听端口>'
+node_ip='<允许接入的远端节点 IPv4>'
+agent_ip='<该节点访问中心的出口 IPv4>'
+admin_ip='<管理电脑的出口 IPv4>'
+ops='<个人 Linux 运维用户名>'
+```
+
+确认当前是首次安装，校验归档和配置，再准备系统依赖。已有中心或 Agent 时，请使用第 7 节的升级步骤。
+
+```bash
+test "$(id -u)" = 0
+[[ $release_id =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ && $ops =~ ^[a-z][a-z0-9-]{0,23}$ ]]
+python3 - "$domain" "$app_port" "$node_ip" "$agent_ip" "$admin_ip" <<'PY'
+import ipaddress
+import re
+import sys
+
+domain, port, *addresses = sys.argv[1:]
+labels = domain.split(".")
+if len(labels) < 2 or labels[-1].isdigit() or len(domain) > 253 or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels):
+    raise SystemExit("请填写有效的面板域名")
+if not port.isascii() or not port.isdecimal() or not 10000 <= int(port) <= 65535:
+    raise SystemExit("请选择有效的内部高端口")
+for address in addresses:
+    ipaddress.IPv4Address(address)
+PY
+getent ahostsv4 "$domain" | awk '{print $1}' | sort -u
 archive="asterion-$release_id.tar.gz"
 sha256sum --check "$archive.sha256"
-release_dir="/opt/asterion/releases/$release_id"
-sudo install -d -m 0755 "$release_dir"
-sudo tar -xzf "$archive" --no-same-owner -C "$release_dir"
-sudo install -d -m 0750 /etc/asterion
-sudo install -m 0600 "$release_dir/deploy/server.env.example" /etc/asterion/server.env
-sudo install -m 0644 '<证书链 PEM 文件>' /etc/asterion/tls.crt
-sudo install -m 0600 '<私钥 PEM 文件>' /etc/asterion/tls.key
-sudo install -m 0644 "$release_dir/deploy/asterion-server.service" /etc/systemd/system/asterion-server.service
-sudo ln -sfnT "$release_dir" /opt/asterion/current
+if test -n "$(ss -H -lnt "sport = :$app_port")"; then echo '内部端口已被占用'; exit 1; fi
+nginx -t
+systemctl is-active nginx
+apt-get update
+apt-get install -y openssl ca-certificates curl python3-paramiko sqlite3 sudo openssh-client
+/usr/bin/python3 -I -c 'import paramiko'
+if getent passwd "$ops" >/dev/null || getent group "$ops" >/dev/null; then
+  echo '个人账号或同名组已存在，请先检查'; exit 1
+fi
+for path in /opt/asterion /etc/asterion /var/lib/{,private/}asterion \
+  /opt/asterion-agent /etc/asterion-agent /var/lib/{,private/}asterion-agent \
+  /etc/systemd/system/asterion-agent.service{,.d} /run/systemd/system/asterion-agent.service.d \
+  /run/asterion-self-enrollment /run/asterion-setup \
+  /etc/systemd/system/asterion-{server.service,server.service.d} \
+  /run/systemd/system/asterion-server.service.d /run/asterion-first-admin \
+  "/etc/sudoers.d/asterion-$ops"; do
+  if test -e "$path" || test -L "$path"; then printf '已有路径：%s\n' "$path"; exit 1; fi
+done
+install -d -m 0700 /run/asterion-setup
+archive_path="$PWD/$archive"
+cd /run/asterion-setup
+read -rp '粘贴个人运维账号的 SSH 公钥：' ops_public_key
+printf '%s\n' "$ops_public_key" > ops-key.pub
+ssh-keygen -lf ops-key.pub
 ```
 
-多个节点连接时，在 `/etc/asterion/server.env` 中将 `ASTERION_LISTEN_ADDR` 改为 Tailscale、WireGuard 或其他可信私网的本机地址和端口。管理入口按私网访问范围限制。默认回环监听适用于中心同机 Agent 或通过隧道访问的面板。
+核对公钥指纹后创建个人账号。面板使用独立的管理员口令。Linux 运维用户只获得查看中心最近 100 行日志和重启该服务的 sudo 权限。
 
 ```bash
-sudoedit /etc/asterion/server.env
+adduser --disabled-password --gecos '' "$ops"
+ops_home=$(getent passwd "$ops" | cut -d: -f6)
+ops_group=$(id -gn "$ops")
+install -d -m 0700 -o "$ops" -g "$ops_group" "$ops_home/.ssh"
+install -m 0600 -o "$ops" -g "$ops_group" ops-key.pub "$ops_home/.ssh/authorized_keys"
+rule=$(mktemp)
+printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl restart asterion-server.service, /usr/bin/journalctl --no-pager -u asterion-server.service -n 100\n' "$ops" > "$rule"
+visudo -cf "$rule"
+install -o root -g root -m 0440 "$rule" "/etc/sudoers.d/asterion-$ops"
+unlink "$rule"
+sudo -l -U "$ops"
 ```
 
-systemd 为服务分配专用身份，并在 `/var/lib/asterion` 保存 SQLite。TLS 证书和私钥通过 `LoadCredential` 读取。更新同一签发机构的证书时，替换 PEM 后重启中心。更换私有 CA 时，先更新浏览器和 Agent 的信任设置。[systemd 凭据说明](https://systemd.io/CREDENTIALS/)
+## 3. 安装中心、配置 Nginx 并开启自监控
 
-## 3. 初始化管理员并启动中心
-
-首次使用新的 SQLite 数据库时，创建一个仅 root 可读的口令文件。参考[本地开发](development.md#3-启动中心)的用户名与口令限制。
+在中心生成独立的内部 CA 和回环证书，供 Nginx 和同机 Agent 验证内部服务。CA 私钥以口令加密，备份到受保护的位置供续签。公网域名使用客户端信任的证书。
 
 ```bash
-sudo install -m 0600 /dev/null /etc/asterion/admin-password
-sudoedit /etc/asterion/admin-password
-sudo install -d -m 0755 /etc/systemd/system/asterion-server.service.d
-sudoedit /etc/systemd/system/asterion-server.service.d/10-bootstrap.conf
+install -d -m 0700 /etc/asterion/pki
+openssl genrsa -aes256 -out /etc/asterion/pki/ca.key 3072
+openssl req -x509 -new -sha256 -days 1825 -key /etc/asterion/pki/ca.key \
+  -subj '/CN=Asterion Internal CA' -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' -out ca.crt
+(umask 077; openssl req -new -newkey rsa:3072 -nodes -subj /CN=localhost -keyout tls.key -out tls.csr)
+openssl x509 -req -sha256 -days 180 -in tls.csr -CA ca.crt -CAkey /etc/asterion/pki/ca.key \
+  -CAserial /etc/asterion/pki/ca.srl -CAcreateserial \
+  -extfile <(printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'extendedKeyUsage=serverAuth' \
+    'keyUsage=critical,digitalSignature,keyEncipherment' 'subjectAltName=DNS:localhost,IP:127.0.0.1') \
+  -out tls.crt
+openssl verify -purpose sslserver -verify_hostname localhost -CAfile ca.crt tls.crt
+openssl verify -purpose sslserver -verify_ip 127.0.0.1 -CAfile ca.crt tls.crt
 ```
 
-将以下内容写入 `10-bootstrap.conf`，替换管理员用户名。systemd 在服务自己的临时目录生成权限为 0600 的副本。
+安装发布包和内部 TLS 配置。远端 Agent 使用系统信任库验证公网域名证书，中心自身的 Agent 使用内部 CA。中心只向指定的 Agent 目标发起 SSH 部署。
 
-```ini
+```bash
+release="/opt/asterion/releases/$release_id"
+install -d -m 0755 /opt/asterion /opt/asterion/releases "$release"
+tar -xzf "$archive_path" --no-same-owner -C "$release"
+chmod -R u=rwX,go=rX "$release"
+ln -s "$release" /opt/asterion/current
+install -d -m 0750 /etc/asterion
+install -m 0600 tls.key /etc/asterion/tls.key
+install -m 0644 tls.crt /etc/asterion/tls.crt
+install -m 0644 ca.crt /etc/asterion/deploy-ca.crt
+install -m 0644 "$release/deploy/asterion-server.service" /etc/systemd/system/
+cat > /etc/asterion/server.env <<CONF
+ASTERION_LISTEN_ADDR=127.0.0.1:$app_port
+ASTERION_DATABASE_URL=sqlite:///var/lib/asterion/asterion.db
+ASTERION_WEB_DIR=/opt/asterion/current/web
+ASTERION_SSH_DEPLOY_AGENT=/opt/asterion/current/bin/asterion-agent
+ASTERION_SSH_DEPLOY_CENTER_URL=https://$domain
+ASTERION_SSH_DEPLOY_NETWORKS=$node_ip/32
+ASTERION_TERMINAL_ENABLED=0
+CONF
+chmod 0600 /etc/asterion/server.env
+```
+
+给个人面板管理员设置 12 到 128 字节的口令，终端不会回显。临时初始化配置存放在 `/run`。
+
+```bash
+read -rsp '设置面板管理员口令：' secret; echo
+read -rsp '再次输入：' again; echo
+size=$(printf %s "$secret" | wc -c)
+[[ "$secret" == "$again" && $size -ge 12 && $size -le 128 && $secret =~ [^[:space:]] ]]
+(umask 077; printf '%s\n' "$secret" > /run/asterion-first-admin)
+unset secret again
+install -d -m 0755 /run/systemd/system/asterion-server.service.d
+cat > /run/systemd/system/asterion-server.service.d/10-bootstrap.conf <<UNIT
 [Service]
-LoadCredential=admin-password:/etc/asterion/admin-password
+LoadCredential=admin-password:/run/asterion-first-admin
 RuntimeDirectory=asterion-bootstrap
 RuntimeDirectoryMode=0700
 ExecStartPre=/usr/bin/install -m 0600 %d/admin-password /run/asterion-bootstrap/admin-password
-Environment="ASTERION_ADMIN_USERNAME=<管理员用户名>"
+Environment=ASTERION_ADMIN_USERNAME=${ops}-panel
 Environment=ASTERION_ADMIN_PASSWORD_FILE=/run/asterion-bootstrap/admin-password
+UNIT
+printf '面板用户名：%s-panel\n' "$ops"
 ```
+
+为面板域名准备 的受信任证书。已有证书时，将下面两个变量填为服务器上的完整证书链和私钥路径。默认路径对应 Certbot，首次签发使用 DNS-01。根据提示添加 `_acme-challenge.$domain` 的 TXT 记录，待 DNS 生效后再继续。签发过程无需新增低端口监听。[Certbot DNS 验证说明](https://eff-certbot.readthedocs.io/en/stable/using.html#manual)
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemd-analyze verify /etc/systemd/system/asterion-server.service
-sudo systemctl enable --now asterion-server.service
-sudo systemctl status --no-pager asterion-server.service
-sudo journalctl -u asterion-server.service -n 50 --no-pager
+public_chain="/etc/letsencrypt/live/$domain/fullchain.pem"
+public_key="/etc/letsencrypt/live/$domain/privkey.pem"
+if [[ ! -s "$public_chain" || ! -s "$public_key" ]]; then
+  apt-get install -y certbot
+  certbot certonly --manual --preferred-challenges dns --cert-name "$domain" -d "$domain"
+fi
+test -s "$public_chain"
+test -s "$public_key"
+openssl verify -purpose sslserver -verify_hostname "$domain" \
+  -CAfile /etc/ssl/certs/ca-certificates.crt -untrusted "$public_chain" "$public_chain"
+test "$(openssl x509 -in "$public_chain" -noout -pubkey)" = "$(openssl pkey -in "$public_key" -pubout)"
 ```
 
-从有访问权限的主机验证 HTTPS。私有 CA 通过 `--cacert` 指定。证书已被系统信任时可省略该参数。
+中心首先按内部端口启动。在本机确认后，再接入 Nginx 的 HTTPS 站点。
 
 ```bash
-center_origin='https://<证书中的域名或IP>:<中心端口>'
-curl --fail --silent --show-error --cacert '<CA PEM 文件>' "$center_origin/healthz"
-curl --fail --silent --show-error --cacert '<CA PEM 文件>' -o /dev/null "$center_origin/login"
+systemctl daemon-reload
+systemd-analyze verify asterion-server.service
+systemctl enable --now asterion-server.service
+curl --noproxy '*' --retry 8 --retry-connrefused --retry-delay 1 -fsS \
+  --cacert /etc/asterion/deploy-ca.crt https://127.0.0.1:$app_port/healthz
 ```
 
-浏览器使用相同地址和可信 CA 打开 `/login`。确认登录成功后，删除临时初始化配置及明文口令文件，重启中心。
+下面按同机 Ubuntu Nginx 的 `http` 配置已包含 `/etc/nginx/conf.d/*.conf` 编写。已有该域名站点时，将 `map` 放在 `http` 级，合并 `server` 中的代理、域名检查与访问控制到现有站点，沿用其证书路径。新站点可直接执行下列命令。公网登录、API 和 Agent WebSocket 共用同一域名，代理到中心时校验证书。[Nginx WebSocket 配置](https://nginx.org/en/docs/http/websocket.html) · [上游 TLS 校验](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_ssl_verify)
 
 ```bash
-sudo rm -- /etc/systemd/system/asterion-server.service.d/10-bootstrap.conf /etc/asterion/admin-password
-sudo systemctl daemon-reload
-sudo systemctl restart asterion-server.service
+site_file=/etc/nginx/conf.d/$domain.conf
+test -d /etc/nginx/conf.d
+test ! -e "$site_file" && test ! -L "$site_file" || { echo '请合并到已有站点配置'; exit 1; }
+if nginx -T 2>/dev/null | awk -v host="$domain" '
+  $1 == "server_name" {gsub(/;/, " "); for (i=2; i<=NF; i++) if ($i == host) found=1}
+  END {exit !found}'; then
+  echo '该域名已有站点，请合并配置'; exit 1
+fi
+cat > "$site_file" <<NGINX
+map \$http_upgrade \$asterion_connection_upgrade {
+    default upgrade;
+    '' close;
+}
+server {
+    listen 443 ssl;
+    server_name $domain;
+    ssl_certificate "$public_chain";
+    ssl_certificate_key "$public_key";
+
+    if (\$ssl_server_name != "$domain") { return 444; }
+    if (\$host != "$domain") { return 444; }
+    allow 127.0.0.1;
+    allow $admin_ip;
+    allow $agent_ip;
+    deny all;
+
+    location / {
+        proxy_pass https://127.0.0.1:$app_port;
+        proxy_ssl_server_name on;
+        proxy_ssl_name localhost;
+        proxy_ssl_trusted_certificate /etc/asterion/deploy-ca.crt;
+        proxy_ssl_verify on;
+
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$asterion_connection_upgrade;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+}
+NGINX
+if nginx -t; then
+  systemctl reload nginx
+else
+  mv -- "$site_file" "$site_file.failed-$(date +%s)"
+  echo 'Nginx 配置检查失败，已退出加载目录的 *.conf 匹配范围'
+  exit 1
+fi
+curl --noproxy '*' --resolve "$domain:443:127.0.0.1" -fsS "https://$domain/healthz"
 ```
 
-使用原管理员口令再次登录。面板注销会撤销当前会话。会话最长有效 12 小时。
+如果使用 Certbot 手动 DNS 验证，需要在证书到期前重新运行 `certbot certonly --manual --preferred-challenges dns --cert-name "$domain" -d "$domain"` 并完成 TXT 验证。证书更新成功后执行 `nginx -t && systemctl reload nginx` 载入新证书。使用 DNS 提供商自动续签工具时，将检查和重载设为续签成功后的钩子。
 
-## 4. 安装和注册 Agent
+### 安装并注册监控中心自身的 Agent
 
-首次安装和已有节点重新部署可使用[面板 SSH 接入](ssh-enrollment.md)。在中心启用一次后，进入「接入服务器」或现有节点的「Agent 接入」页面，核对主机、查看命令并确认部署。部署完成即断开 SSH。以下是手动接入步骤。
+继续在中心的 root Bash 执行。Agent 复用中心发布包中的二进制，使用专用 systemd 身份和持久目录。回环 HTTPS 健康检查应返回 `{"status":"ok"}`。
 
-在每台目标机验证上传文件后，准备 Agent 的安装位置。WSL Ubuntu 使用同一 Agent。更新部署时，中心、Agent 和 Docker 只读采集程序应使用同一构建产物，以支持按需查询已纳管的进程和容器。运行 systemd 样例需要该发行版已启用 systemd，也可使用[本地开发](development.md#5-注册一个本地-agent)中的命令直接启动。
+```bash
+curl --noproxy '*' --cacert /etc/asterion/deploy-ca.crt -fsS https://127.0.0.1:$app_port/healthz
+install -d -m 0755 /opt/asterion-agent
+ln -s /opt/asterion/current /opt/asterion-agent/current
+install -m 0644 /opt/asterion/current/deploy/asterion-agent.service /etc/systemd/system/
+install -d -m 0750 /etc/asterion-agent
+cat > /etc/asterion-agent/agent.env <<CONF
+ASTERION_SERVER_URL=https://127.0.0.1:$app_port
+ASTERION_AGENT_STATE_FILE=/var/lib/asterion-agent/identity.json
+CONF
+chmod 0600 /etc/asterion-agent/agent.env
+install -d -m 0755 /etc/systemd/system/asterion-agent.service.d
+cat > /etc/systemd/system/asterion-agent.service.d/20-local.conf <<'UNIT'
+[Unit]
+Wants=asterion-server.service
+After=asterion-server.service
+[Service]
+LoadCredential=ca.pem:/etc/asterion/deploy-ca.crt
+Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
+UNIT
+```
+
+下面通过本机面板 API 自动登记「中心服务器」，一次性注册凭证仅存入 root 可读的运行时目录。登记使用首次启动时的面板口令，完成后注销临时登录会话。[自监控部署脚本](../deploy/self_monitor.py)
+
+```bash
+self_monitor=/opt/asterion/current/deploy/self_monitor.py
+python3 "$self_monitor" register --port "$app_port" --username "$ops-panel"
+install -d -m 0755 /run/systemd/system/asterion-agent.service.d
+cat > /run/systemd/system/asterion-agent.service.d/10-self-enroll.conf <<'UNIT'
+[Service]
+LoadCredential=enrollment:/run/asterion-self-enrollment/token
+RuntimeDirectory=asterion-agent-bootstrap
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/install -m 0600 %d/enrollment /run/asterion-agent-bootstrap/enrollment
+Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment
+UNIT
+systemctl daemon-reload
+systemd-analyze verify asterion-agent.service
+systemctl enable --now asterion-agent.service
+```
+
+验证本机身份已经保存，且中心收到了该节点的新心跳和新指标。确认后移除一次性注册配置，重启 Agent 并复核重连。后续开机会自动使用已保存的身份。
+
+```bash
+python3 "$self_monitor" wait
+unlink /run/systemd/system/asterion-agent.service.d/10-self-enroll.conf
+unlink /run/asterion-self-enrollment/token
+systemctl daemon-reload
+systemctl restart asterion-agent.service
+python3 "$self_monitor" wait
+```
+
+如果首次注册超过 10 分钟且面板仍显示「待接入」，在面板对已确认是本机的待接入节点换发一次性凭证。用 `read -rsp '新凭证：' token` 隐式输入，执行 `(umask 077; printf '%s\n' "$token" > /run/asterion-self-enrollment/token)` 和 `unset token`，然后重启 Agent，再执行上方的心跳与指标验证。已在线的本机节点可沿用保存的身份。
+
+在浏览器打开面板域名的 `/login`，使用新建的面板管理员登录，确认「中心服务器」在线。然后在中心清理本次初始化口令和内部私钥的临时副本，重启中心并复核自监控。
+
+```bash
+test "$(pwd -P)" = /run/asterion-setup
+cmp -s tls.key /etc/asterion/tls.key
+unlink tls.key
+unlink /run/systemd/system/asterion-server.service.d/10-bootstrap.conf
+unlink /run/asterion-first-admin
+systemctl daemon-reload
+systemctl restart asterion-server.service
+curl --noproxy '*' --retry 8 --retry-all-errors --retry-delay 1 -fsS \
+  --resolve "$domain:443:127.0.0.1" "https://$domain/healthz"
+systemctl is-active asterion-server.service asterion-agent.service nginx
+python3 "$self_monitor" wait
+```
+
+## 4. 安装和注册远端 Agent
+
+在公网面板「节点 → 接入服务器」填写远端主机的 SSH 信息。核对主机指纹和命令中的中心域名后确认安装，以「已收到 Agent 心跳」作为完成标志。已有节点可从「Agent 接入」重新部署。[SSH 接入步骤](ssh-enrollment.md)
+
+### 手动安装远端 Agent
+
+需要手动安装或启用可选运维程序时，先在中心的构建账号下将第 1 节生成的归档和校验文件复制到目标服务器。
+
+```bash
+release_id='<构建编号>'
+archive="asterion-$release_id.tar.gz"
+scp "$HOME/$archive" "$HOME/$archive.sha256" '<SSH用户>@<远端主机>:'
+```
+
+接下来在目标服务器执行。目标的架构和运行库须与发布包兼容。
 
 ```bash
 sudo apt-get update
@@ -151,7 +444,7 @@ LoadCredential=ca.pem:/etc/asterion-agent/ca.pem
 Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
 ```
 
-在「节点 → 接入服务器 → 手动接入」填写名称并选择 Linux 或 WSL。生成凭证后，确认页面中的中心地址可由目标服务器访问。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
+在「节点 → 接入服务器 → 手动接入」填写名称并选择对应环境。生成凭证后，确认中心地址为目标节点可访问的 HTTPS 域名。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
 
 ```bash
 sudo install -m 0600 /dev/null /etc/asterion-agent/enrollment
@@ -187,14 +480,7 @@ sudo systemctl restart asterion-agent.service
 
 ## 5. 远程访问和节点凭证
 
-仅面板通过 SSH 隧道访问时，在 WSL 开新终端。将中心回环端口转到本机回环。以下为使用默认中心端口的样例。
-
-```bash
-target='<SSH用户>@<SSH主机>'
-ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8080:127.0.0.1:8080 "$target"
-```
-
-证书包含 `127.0.0.1` 时可以打开 `https://127.0.0.1:8080/login`。证书仅包含域名时，将该域名在客户端解析到本机回环，使用该域名打开同一转发端口。完成后按 `Ctrl+C` 关闭隧道。
+浏览器通过面板域名的 `/login` 登录。远端节点使用同一 HTTPS 域名，中心主机的 Agent 使用配置的回环端口。
 
 节点断线超过 20 秒后显示离线，凭证吊销后旧 Agent 无法继续刷新心跳。要替换凭证，在节点列表或详情打开「Agent 接入 → 手动接入」并确认换发，该操作保留节点 ID 并作废原设备凭证及旧注册凭证。先停止 Agent，移走旧身份文件，再按第 4 节的注册凭证配置和启动步骤操作。
 
@@ -218,16 +504,22 @@ sudo sqlite3 -batch -bail /var/lib/asterion/asterion.db ".backup '$backup_dir/as
 sudo chmod 0600 "$backup_dir/asterion.db"
 sudo sqlite3 -readonly "$backup_dir/asterion.db" 'PRAGMA quick_check;'
 sudo install -m 0600 /etc/asterion/server.env /etc/asterion/tls.crt /etc/asterion/tls.key "$backup_dir/"
+if sudo test -f /etc/asterion/deploy-ca.crt; then
+  sudo install -m 0600 /etc/asterion/deploy-ca.crt "$backup_dir/"
+fi
 sudo install -m 0600 /etc/systemd/system/asterion-server.service "$backup_dir/"
 readlink -f /opt/asterion/current | sudo tee "$backup_dir/release.txt" > /dev/null
 ```
 
-确认返回 `ok`。发布包和 TLS 私钥按受控备份策略保存。Agent 身份由独立主机维护。需要保留身份时，备份 `agent.env`、私有 CA 设置（如有）和 `identity.json`。身份文件含设备凭证。也可在恢复后重新签发注册凭证。
+内部 CA 的签发私钥、Nginx 域名站点和公网证书按各自的密钥备份流程保管。确认 `quick_check` 返回 `ok`。发布包和 TLS 私钥按受控备份策略保存。Agent 身份由独立主机维护。需要保留身份时，备份 `agent.env`、私有 CA 设置（如有）和 `identity.json`。身份文件含设备凭证。也可在恢复后重新签发注册凭证。
 
 ```bash
 agent_backup="/var/backups/asterion-agent/$(date -u +%Y%m%dT%H%M%SZ)"
 sudo install -d -m 0700 "$agent_backup"
 sudo install -m 0600 /etc/asterion-agent/agent.env /var/lib/asterion-agent/identity.json "$agent_backup/"
+if sudo test -f /etc/systemd/system/asterion-agent.service.d/20-local.conf; then
+  sudo install -m 0600 /etc/systemd/system/asterion-agent.service.d/20-local.conf "$agent_backup/"
+fi
 if sudo test -f /etc/systemd/system/asterion-agent.service.d/20-private-ca.conf; then
   sudo install -m 0600 /etc/asterion-agent/ca.pem \
     /etc/systemd/system/asterion-agent.service.d/20-private-ca.conf "$agent_backup/"
@@ -253,6 +545,9 @@ sudo test -x "$backup_release/bin/asterion-server"
 sudo ln -sfnT "$backup_release" /opt/asterion/current
 sudo install -m 0600 "$backup_dir/server.env" "$backup_dir/tls.key" /etc/asterion/
 sudo install -m 0644 "$backup_dir/tls.crt" /etc/asterion/tls.crt
+if sudo test -f "$backup_dir/deploy-ca.crt"; then
+  sudo install -m 0644 "$backup_dir/deploy-ca.crt" /etc/asterion/deploy-ca.crt
+fi
 sudo install -m 0644 "$backup_dir/asterion-server.service" /etc/systemd/system/asterion-server.service
 sudo systemctl daemon-reload
 ```
@@ -290,6 +585,10 @@ agent_backup='<已验证的 Agent 备份目录>'
 sudo systemctl stop asterion-agent.service
 sudo install -d -m 0750 /etc/asterion-agent
 sudo install -m 0600 "$agent_backup/agent.env" /etc/asterion-agent/agent.env
+if sudo test -f "$agent_backup/20-local.conf"; then
+  sudo install -d -m 0755 /etc/systemd/system/asterion-agent.service.d
+  sudo install -m 0644 "$agent_backup/20-local.conf" /etc/systemd/system/asterion-agent.service.d/
+fi
 if sudo test -f "$agent_backup/20-private-ca.conf"; then
   sudo test -s "$agent_backup/ca.pem" || exit 1
   sudo install -m 0644 "$agent_backup/ca.pem" /etc/asterion-agent/ca.pem
@@ -310,9 +609,17 @@ sudo systemctl start asterion-agent.service
 
 ## 7. 升级与卸载
 
-升级前备份数据。用新构建编号和各自的解包命令准备中心和 Agent 发布目录。保留已有环境文件、TLS 和身份，使用以下命令更新对应 unit 和 `current` 链接。先升级中心并验证，再按节点升级 Agent。中心启动时执行数据库迁移。升级后检查中心健康，打开节点的 systemd 页签核对已开启监控的 Unit 继续更新。单个服务的监控配置、状态历史与告警保存在中心 SQLite 数据库中，随数据库一起备份。[单个服务监控](monitoring-and-operations.md#单个-systemd-服务监控)
+升级前备份数据。用新构建编号和各自的解包命令准备中心和 Agent 发布目录。保留已有环境文件、TLS 和身份，使用以下命令更新对应 unit 和 `current` 链接。先升级中心并验证，再按节点升级 Agent。同机自监控 Agent 的 `current` 链接指向中心的 `current`；中心升级后重启该 Agent，复核指标即可。中心启动时执行数据库迁移。升级后检查中心健康，打开节点的 systemd 页签核对已开启监控的 Unit 继续更新。单个服务的监控配置、状态历史与告警保存在中心 SQLite 数据库中，随数据库一起备份。[单个服务监控](monitoring-and-operations.md#单个-systemd-服务监控)
 
 ```bash
+cd "$HOME"
+release_id='<新构建编号>'
+archive="asterion-$release_id.tar.gz"
+sha256sum --check "$archive.sha256" || exit 1
+release_dir="/opt/asterion/releases/$release_id"
+sudo mkdir -m 0755 "$release_dir" || exit 1
+sudo tar -xzf "$archive" --no-same-owner -C "$release_dir" || exit 1
+sudo chmod -R u=rwX,go=rX "$release_dir"
 sudo systemctl stop asterion-server.service
 sudo ln -sfnT "$release_dir" /opt/asterion/current
 sudo install -m 0644 "$release_dir/deploy/asterion-server.service" /etc/systemd/system/asterion-server.service
@@ -366,7 +673,7 @@ fi
 sudo systemctl daemon-reload
 ```
 
-停用中心前关闭所有正在使用的 SSH 隧道。以下命令归档中心配置和发布文件。
+停用中心前停用对应 Nginx 站点并检查、重载 Nginx。若启用了自监控，一并按上述步骤停用本机 Agent。以下命令归档中心配置和发布文件。
 
 ```bash
 sudo systemctl disable --now asterion-server.service
@@ -492,7 +799,7 @@ sudo systemd-analyze verify /etc/systemd/system/asterion-terminal-helper.service
 sudo systemctl enable --now asterion-terminal-helper.service
 ```
 
-在中心 `server.env` 和对应 Agent 的 `agent.env` 添加 `ASTERION_TERMINAL_ENABLED=1`，保持监听和管理入口在回环或私有网络。采样与保留配置写入中心 `server.env`。
+在中心 `server.env` 和对应 Agent 的 `agent.env` 添加 `ASTERION_TERMINAL_ENABLED=1`，启用前先将包括 Nginx 在内的管理入口限制到可信私网，终端仅允许在该网络访问。采样与保留配置写入中心 `server.env`。
 
 ```bash
 sudoedit /etc/asterion/server.env
