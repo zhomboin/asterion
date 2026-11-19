@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, errorMessage, isUnauthorized, request, type Node, type NodeDraft } from './api';
 import { Problem } from './ui';
+import { DeploymentLog } from './DeploymentLog';
 import { useResource } from './useResource';
 
 type Inspection = {
@@ -30,11 +31,6 @@ export function SshEnrollment({ existing, onManual, onExpired }: Props) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [retry, setRetry] = useState(0);
   const active = useRef(true);
-  const output = useRef<HTMLPreElement>(null);
-  const follow = useRef(true);
-  useEffect(() => {
-    if (output.current && follow.current) output.current.scrollTop = output.current.scrollHeight;
-  }, [snapshot?.lines.length]);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => {
     if (!job) return;
@@ -98,7 +94,6 @@ export function SshEnrollment({ existing, onManual, onExpired }: Props) {
         form.reset();
         setPlan(undefined);
         setJob(started);
-        follow.current = true;
       }
     } catch (failure) {
       if (isUnauthorized(failure)) onExpired(); else setError(errorMessage(failure));
@@ -117,11 +112,7 @@ export function SshEnrollment({ existing, onManual, onExpired }: Props) {
       }}>{existing ? '重新部署 Agent' : '接入另一台服务器'}</button>}
     </div>
     <h2>执行命令与日志</h2>
-    <pre className="output deployment-output" ref={output} role="log" aria-label="SSH 部署日志" tabIndex={0}
-      onScroll={(event) => {
-        const element = event.currentTarget;
-        follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32;
-      }}>{snapshot?.lines.join('\n') || '正在等待部署日志…'}</pre>
+    <DeploymentLog lines={snapshot?.lines ?? []} failed={snapshot?.state === 'failed'} />
   </div>;
   if (plan) return <form className="fields" onSubmit={deploy}>
     <dl className="detail-facts">
