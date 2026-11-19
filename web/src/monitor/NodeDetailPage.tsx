@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Node } from '../api';
 import { NodeStatus, PageHeader, Problem, Tabs, Timestamp } from '../ui';
-import { NodeDialog } from '../NodeDialog';
 import { useResource } from '../useResource';
 import { MetricsPanel } from './MetricsPanel';
 import { ProcessesPanel } from './ProcessesPanel';
@@ -34,7 +33,6 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
   const operationCatalog = useResource<OperationCatalog>(online ? base + '/operation-catalog' : null, onExpired, 30_000);
   const terminal = useResource<{ enabled: boolean }>(online ? base + '/terminal/capability' : null, onExpired, 30_000);
   const hasTerminal = Boolean(online && terminal.data?.enabled && !terminal.error);
-  const [connect, setConnect] = useState(false);
   const [proposal, setProposal] = useState<{ action: OperationAction; name?: string; content?: string }>();
   const operations: NodeOperations | undefined = online && operationCatalog.data?.enabled && !operationCatalog.error
     ? { catalog: operationCatalog.data, propose: (action, name, content) => setProposal({ action, name, content }) }
@@ -67,7 +65,7 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
             scope={<>{data.kind === 'wsl' ? '监控范围 · WSL' : '监控范围 · Linux'}{data.wsl_distro && ' · ' + data.wsl_distro}</>}
             actions={<>
               <a className="text-link" href={'/operations?node_id=' + encodeURIComponent(id)}>任务记录</a>
-              <button type="button" onClick={() => setConnect(true)}>Agent 接入</button>
+              <a className="text-link" href={base + '/deploy'}>Agent 接入</a>
               <NodeStatus node={data} />
             </>}
           />
@@ -97,7 +95,6 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
           {activeTab === 'command' && operations && <CommandPanel controls={operations} />}
           {activeTab === 'terminal' && hasTerminal && <TerminalPanel nodeId={id} onExpired={onExpired} />}
           {online && activeTab === 'accounts' && <AccountsPanel base={base} onExpired={onExpired} operations={operations} />}
-          {connect && <NodeDialog node={data} connect onClose={() => setConnect(false)} onUpdated={node.refresh} onExpired={onExpired} />}
           {proposal && operations && (
             <ProposalDialog
               nodeId={id}

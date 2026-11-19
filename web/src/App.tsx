@@ -5,6 +5,7 @@ import { AssetListPage } from './assets/AssetListPage';
 import { Login } from './Login';
 import { NodeDetailPage } from './monitor/NodeDetailPage';
 import { NodesPage } from './NodesPage';
+import { NodeConfigurationPage } from './NodeConfigurationPage';
 import { OperationDetailPage } from './operations/OperationDetailPage';
 import { OperationsPage } from './operations/OperationsPage';
 import { AlertsPage } from './alerts/AlertsPage';
@@ -19,11 +20,15 @@ type Auth =
 
 type Destination =
   | { page: 'overview' | 'nodes' | 'assets' | 'operations' | 'alerts' | 'settings' }
+  | { page: 'node-config'; id?: string; deploy: boolean }
   | { page: 'node' | 'asset' | 'operation'; id: string };
 
 function destination(path: string): Destination | null {
   if (path === '/overview') return { page: 'overview' };
   if (path === '/nodes') return { page: 'nodes' };
+  if (path === '/nodes/new') return { page: 'node-config', deploy: true };
+  const config = /^\/nodes\/([a-f0-9]{32})\/(manage|deploy)$/u.exec(path);
+  if (config) return { page: 'node-config', id: config[1], deploy: config[2] === 'deploy' };
   if (path === '/assets') return { page: 'assets' };
   if (path === '/operations') return { page: 'operations' };
   if (path === '/alerts') return { page: 'alerts' };
@@ -218,6 +223,7 @@ export function App() {
           {logoutError && <p className="notice" role="alert">{logoutError}</p>}
           {(active.page === 'overview' || active.page === 'nodes') && <NodesPage manage={active.page === 'nodes'} onExpired={expire} />}
           {active.page === 'node' && <NodeDetailPage key={active.id} id={active.id} onExpired={expire} />}
+          {active.page === 'node-config' && <NodeConfigurationPage id={active.id} deploy={active.deploy} onExpired={expire} />}
           {active.page === 'assets' && <AssetListPage onExpired={expire} />}
           {active.page === 'asset' && <AssetDetailPage id={active.id} onExpired={expire} />}
           {active.page === 'operations' && <OperationsPage onExpired={expire} />}
@@ -234,7 +240,7 @@ const today = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', 
 
 const navigation: { href: string; label: string; icon: IconName; pages: Destination['page'][] }[] = [
   { href: '/overview', label: '总览', icon: 'overview', pages: ['overview'] },
-  { href: '/nodes', label: '节点', icon: 'nodes', pages: ['nodes', 'node'] },
+  { href: '/nodes', label: '节点', icon: 'nodes', pages: ['nodes', 'node', 'node-config'] },
   { href: '/assets', label: '资产', icon: 'assets', pages: ['assets', 'asset'] },
   { href: '/operations', label: '运维任务', icon: 'operations', pages: ['operations', 'operation'] },
   { href: '/alerts', label: '告警', icon: 'alerts', pages: ['alerts'] },

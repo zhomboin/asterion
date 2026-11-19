@@ -115,7 +115,7 @@ sudo systemctl restart asterion-server.service
 
 ## 4. 安装和注册 Agent
 
-首次安装优先使用[面板 SSH 接入](ssh-enrollment.md)。只需在中心启用一次；部署完成即断开 SSH。以下是手动接入步骤。
+首次安装和已有节点重新部署可使用[面板 SSH 接入](ssh-enrollment.md)。在中心启用一次后，进入「接入服务器」或现有节点的「Agent 接入」页面，核对主机、查看命令并确认部署。部署完成即断开 SSH。以下是手动接入步骤。
 
 在每台目标机验证上传文件后，准备 Agent 的安装位置。WSL Ubuntu 使用同一 Agent。更新部署时，中心、Agent 和 Docker 只读采集程序应使用同一构建产物，以支持按需查询已纳管的进程和容器。运行 systemd 样例需要该发行版已启用 systemd，也可使用[本地开发](development.md#5-注册一个本地-agent)中的命令直接启动。
 
@@ -151,7 +151,7 @@ LoadCredential=ca.pem:/etc/asterion-agent/ca.pem
 Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
 ```
 
-在「节点 → 接入服务器 → 手动接入」填写名称并选择 Linux 或 WSL。生成凭证后，确认弹窗中的中心地址可由目标服务器访问。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
+在「节点 → 接入服务器 → 手动接入」填写名称并选择 Linux 或 WSL。生成凭证后，确认页面中的中心地址可由目标服务器访问。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
 
 ```bash
 sudo install -m 0600 /dev/null /etc/asterion-agent/enrollment
@@ -196,7 +196,7 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8080:127.0.0.1:8080 "$target"
 
 证书包含 `127.0.0.1` 时可以打开 `https://127.0.0.1:8080/login`。证书仅包含域名时，将该域名在客户端解析到本机回环，使用该域名打开同一转发端口。完成后按 `Ctrl+C` 关闭隧道。
 
-节点断线超过 20 秒后显示离线，凭证吊销后旧 Agent 无法继续刷新心跳。要替换凭证，在节点列表或详情打开「Agent 接入」并确认换发，该操作保留节点 ID 并作废原设备凭证及旧注册凭证。先停止 Agent，移走旧身份文件，再按第 4 节的注册凭证配置和启动步骤操作。
+节点断线超过 20 秒后显示离线，凭证吊销后旧 Agent 无法继续刷新心跳。要替换凭证，在节点列表或详情打开「Agent 接入 → 手动接入」并确认换发，该操作保留节点 ID 并作废原设备凭证及旧注册凭证。先停止 Agent，移走旧身份文件，再按第 4 节的注册凭证配置和启动步骤操作。
 
 ```bash
 sudo systemctl stop asterion-agent.service

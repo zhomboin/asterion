@@ -55,6 +55,8 @@ pub fn router(
             .route_service("/overview", index.clone())
             .route_service("/nodes", index.clone())
             .route_service("/nodes/{id}", index.clone())
+            .route_service("/nodes/{id}/manage", index.clone())
+            .route_service("/nodes/{id}/deploy", index.clone())
             .route_service("/assets", index.clone())
             .route_service("/assets/{id}", index.clone())
             .route_service("/operations", index.clone())

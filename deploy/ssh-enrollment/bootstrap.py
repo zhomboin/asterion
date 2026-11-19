@@ -109,6 +109,63 @@ def steps(center, ca, checksum):
     ]
 
 
+def reinstall_steps(center, ca, checksum, node_id):
+    require(re.fullmatch(r"[0-9a-f]{32}", node_id), "节点 ID 无效")
+    initial = steps(center, ca, checksum)
+    identity = (f"""test -f {STATE}/identity.json && test ! -L {STATE}/identity.json && """
+                f"""grep -Eq '"node_id"[[:space:]]*:[[:space:]]*"{node_id}"' {STATE}/identity.json && """
+                f"grep -Fxq {shlex.quote('ASTERION_SERVER_URL=' + center)} {CONF}/agent.env")
+    # Keep the complete release (including optional helpers) and the previous symlink target.
+    # Only change current after the upload has been verified. The trap handles a failed restart.
+    install = f"""set -eu
+exec 9<{APP}
+flock -n 9
+{identity} || exit 1
+old=$(readlink -e {APP}/current)
+test -L {APP}/current
+test "$(dirname "$old")" = {APP}/releases
+for dir in {APP} {APP}/releases "$old" "$old/bin"; do
+    test -d "$dir" && test ! -L "$dir" && test "$(stat -c %u "$dir")" = 0 && test -z "$(find "$dir" -maxdepth 0 -perm /022 -print)" || exit 1
+done
+stage=$(mktemp -d {APP}/releases/agent-XXXXXXXX)
+work=$(mktemp -d {APP}/.switch-XXXXXXXX) || {{ rmdir "$stage"; exit 1; }}
+switched=no
+cleanup() {{
+    result=$?
+    trap - EXIT HUP INT TERM
+    if test "$result" -ne 0; then
+        if test "$switched" = yes; then
+            mv -Tf "$work/previous" {APP}/current && systemctl restart {UNIT} || exit 1
+        fi
+        rm -rf -- "$stage"
+    fi
+    rm -rf -- "$work"
+    exit "$result"
+}}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+dd of="$work/agent" conv=excl status=none
+printf '%s  %s\\n' '{checksum}' "$work/agent" | sha256sum -c -
+chmod 0755 "$work/agent"
+if cmp -s "$work/agent" "$old/bin/asterion-agent"; then
+    rmdir "$stage"
+    systemctl restart {UNIT}
+    systemctl is-active --quiet {UNIT}
+    exit 0
+fi
+cp -al -- "$old/." "$stage/"
+mv -Tf "$work/agent" "$stage/bin/asterion-agent"
+chmod 0755 "$stage"
+ln -s "$old" "$work/previous"
+ln -s "$stage" "$work/next"
+switched=yes
+mv -Tf "$work/next" {APP}/current
+systemctl restart {UNIT}
+systemctl is-active --quiet {UNIT}"""
+    return [initial[0], ("核对节点身份与中心", identity, True), initial[2],
+            ("传输 Agent", install, True), ("服务状态", f"systemctl is-active {UNIT}", True)]
+
+
 def invoke(ssh, command, payload=None, transfer_size=0):
     with ssh.open_session(timeout=8) as channel:
         channel.settimeout(20)
@@ -152,7 +209,7 @@ def deploy(ssh, req, plan, binary, ca, center, arch):
     drop = (f"[Service]\nLoadCredential=enrollment:{BOOT}/token\nRuntimeDirectory=asterion-agent-bootstrap\n"
             "RuntimeDirectoryMode=0700\nExecStartPre=/usr/bin/install -m 0600 %d/enrollment /run/asterion-agent-bootstrap/enrollment\n"
             "Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment\n").encode()
-    payloads = {"中心配置":env, "一次性注册凭证":req["token"].encode(), "安装服务单元":unit, "首次启动配置":drop,
+    payloads = {"中心配置":env, "一次性注册凭证":(req.get("token") or "").encode(), "安装服务单元":unit, "首次启动配置":drop,
                 "安装公开 CA":ca, "中心 HTTPS 检查":ca}
     for title, command, privileged in plan:
         actual = shell_command(command, privileged, req["user"])
@@ -206,7 +263,9 @@ def run(req):
     with binary.open("rb") as stream:
         while chunk := stream.read(1024 * 1024):
             checksum.update(chunk)
-    plan = steps(center, ca, checksum.hexdigest())
+    reinstall = req.get("reinstall")
+    plan = (reinstall_steps(center, ca, checksum.hexdigest(), reinstall) if reinstall
+            else steps(center, ca, checksum.hexdigest()))
     manifest = hashlib.sha256(json.dumps([plan, hashlib.sha256(ca or b"").hexdigest(), req["unit"]]).encode()).hexdigest()
     with socket.create_connection((address, port), timeout=4) as sock, contextlib.closing(paramiko.Transport(sock)) as ssh:
         ssh.banner_timeout = 5

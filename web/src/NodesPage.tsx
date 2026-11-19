@@ -1,18 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import type { Node, NodePage, NodeStatusCounts } from './api';
-import { NodeDialog } from './NodeDialog';
 import { Card, CallToAction, Meter, NodeStatus, PageHeader, Pagination, Problem, Timestamp, fraction, nodeStatusLabel, nodeStatuses } from './ui';
 import { useResource } from './useResource';
 import { OverviewAlerts } from './alerts/OverviewAlerts';
 
 const pageSize = 12;
-type Dialog = { node?: Node; connect?: boolean };
 const percent = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
 
 export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: () => void }) {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [offset, setOffset] = useState(0);
-  const [dialog, setDialog] = useState<Dialog>();
   const params = new URLSearchParams({ ...filters, limit: String(pageSize), offset: String(offset) });
   if (!manage) params.set('metrics', 'true');
   const snapshot = useResource<NodePage>('/nodes?' + params, onExpired, 5_000);
@@ -37,7 +34,7 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
       {page && nodes.length > 0 && (
         <ul className="node-list" aria-label="节点列表">
           {nodes.map((node) => (
-            <NodeRow key={node.id} node={node} manage={manage} onManage={() => setDialog({ node })} onConnect={() => setDialog({ node, connect: true })} />
+            <NodeRow key={node.id} node={node} manage={manage} />
           ))}
         </ul>
       )}
@@ -50,7 +47,7 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
       <PageHeader
         title={manage ? '节点' : '总览'}
         scope={manage ? '登记、筛选与管理受监控节点' : '节点健康、资源用量与进行中告警'}
-        actions={<CallToAction icon="plus" onClick={() => setDialog({})}>接入服务器</CallToAction>}
+        actions={<CallToAction icon="plus" onClick={() => window.location.assign('/nodes/new')}>接入服务器</CallToAction>}
       />
       {manage && (
         <form className="filter-bar" onSubmit={search}>
@@ -73,15 +70,6 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
             {list}
           </Card>
         </div>
-      )}
-      {dialog && (
-        <NodeDialog
-          node={dialog.node}
-          connect={dialog.connect}
-          onClose={() => setDialog(undefined)}
-          onUpdated={snapshot.refresh}
-          onExpired={onExpired}
-        />
       )}
     </>
   );
@@ -109,7 +97,7 @@ function HealthCard({ counts }: { counts: NodeStatusCounts }) {
   );
 }
 
-function NodeRow({ node, manage, onManage, onConnect }: { node: Node; manage: boolean; onManage: () => void; onConnect: () => void }) {
+function NodeRow({ node, manage }: { node: Node; manage: boolean }) {
   const environment = node.kind === 'wsl' ? ['WSL', node.wsl_distro].filter(Boolean).join(' · ') : 'Linux';
 
   return (
@@ -136,8 +124,8 @@ function NodeRow({ node, manage, onManage, onConnect }: { node: Node; manage: bo
         )}
       </dl>
       {manage && <div className="row-actions">
-        <button className="quiet" type="button" onClick={onConnect} aria-label={'Agent 接入 ' + node.name}>Agent 接入</button>
-        <button className="quiet" type="button" onClick={onManage} aria-label={'管理 ' + node.name}>管理</button>
+        <a className="text-link" href={'/nodes/' + node.id + '/deploy'} aria-label={'Agent 接入 ' + node.name}>Agent 接入</a>
+        <a className="text-link" href={'/nodes/' + node.id + '/manage'} aria-label={'管理 ' + node.name}>管理</a>
       </div>}
     </li>
   );
