@@ -32,7 +32,7 @@ scp ".local/asterion-$release_id.tar.gz" ".local/asterion-$release_id.tar.gz.sha
 ssh "$target"
 ```
 
-向每台 Agent 主机上传同一发布包和校验文件。
+使用 SSH 一键接入时，只向中心上传发布包。选择手动接入时，向每台 Agent 主机上传同一发布包和校验文件。
 
 ## 2. 安装中心和准备 TLS
 
@@ -115,6 +115,8 @@ sudo systemctl restart asterion-server.service
 
 ## 4. 安装和注册 Agent
 
+首次安装优先使用[面板 SSH 接入](ssh-enrollment.md)。只需在中心启用一次；部署完成即断开 SSH。以下是手动接入步骤。
+
 在每台目标机验证上传文件后，准备 Agent 的安装位置。WSL Ubuntu 使用同一 Agent。更新部署时，中心、Agent 和 Docker 只读采集程序应使用同一构建产物，以支持按需查询已纳管的进程和容器。运行 systemd 样例需要该发行版已启用 systemd，也可使用[本地开发](development.md#5-注册一个本地-agent)中的命令直接启动。
 
 ```bash
@@ -149,7 +151,7 @@ LoadCredential=ca.pem:/etc/asterion-agent/ca.pem
 Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
 ```
 
-在「节点」点击「接入服务器」，填写名称并选择 Linux 或 WSL。生成凭证后，确认弹窗中的中心地址可由目标服务器访问。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
+在「节点 → 接入服务器 → 手动接入」填写名称并选择 Linux 或 WSL。生成凭证后，确认弹窗中的中心地址可由目标服务器访问。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
 
 ```bash
 sudo install -m 0600 /dev/null /etc/asterion-agent/enrollment

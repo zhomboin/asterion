@@ -4,6 +4,7 @@ import {
   type Enrollment, type Node, type NodeDraft,
 } from './api';
 import { AgentEnrollment } from './AgentEnrollment';
+import { SshEnrollment } from './SshEnrollment';
 
 type Props = {
   node?: Node;
@@ -21,6 +22,7 @@ export function NodeDialog({ node, connect, onClose, onUpdated, onExpired }: Pro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [enrollment, setEnrollment] = useState<Enrollment>();
+  const [manual, setManual] = useState(false);
 
   useEffect(() => {
     const element = dialog.current;
@@ -97,7 +99,10 @@ export function NodeDialog({ node, connect, onClose, onUpdated, onExpired }: Pro
       if (!busy) onClose();
     }}>
       <h2 id="node-dialog-title">{titles[step]}</h2>
-      {step === 'form' && (
+      {step === 'form' && !node && !manual && (
+        <SshEnrollment onManual={() => setManual(true)} onClose={onClose} onExpired={onExpired} onUpdated={onUpdated} />
+      )}
+      {step === 'form' && (node || manual) && (
         <form className="fields" onSubmit={save}>
           <label>节点名称<input name="name" defaultValue={node?.name} required maxLength={100} /></label>
           <label>环境<select name="kind" defaultValue={node?.kind ?? 'linux'}>
@@ -109,6 +114,7 @@ export function NodeDialog({ node, connect, onClose, onUpdated, onExpired }: Pro
           <label>备注<textarea name="notes" defaultValue={node?.notes} rows={3} maxLength={1000} /></label>
           {error && <p className="error" role="alert">{error}</p>}
           <div className="dialog-actions">
+            {!node && <button type="button" onClick={() => setManual(false)} disabled={busy}>SSH 接入</button>}
             <button type="button" onClick={onClose} disabled={busy}>取消</button>
             <button className="primary" type="submit" disabled={busy}>{node ? '保存' : '生成注册凭证'}</button>
           </div>
