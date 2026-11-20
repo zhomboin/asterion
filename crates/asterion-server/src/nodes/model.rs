@@ -13,11 +13,12 @@ const NODE_QUERY: &str = "SELECT n.*,
     ELSE 'offline'
     END AS status FROM nodes n";
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NodeInput {
     pub name: String,
     pub ssh_profile: String,
+    pub ssh_auth: Option<super::ssh_auth::Input>,
     pub host_name: Option<String>,
     pub kind: NodeKind,
     #[serde(default)]
@@ -28,9 +29,13 @@ pub(super) struct NodeInput {
 
 impl NodeInput {
     pub fn validate(self, local: bool) -> Result<Self, ApiError> {
+        if self.ssh_auth.is_some() && !(local && self.ssh_profile.starts_with("ssh://")) {
+            return Err(ApiError::INVALID_INPUT);
+        }
         Ok(Self {
             name: validate_name(self.name)?,
             ssh_profile: profile(self.ssh_profile, local)?,
+            ssh_auth: self.ssh_auth,
             host_name: self.host_name.map(validate_name).transpose()?,
             kind: self.kind,
             tags: validate_tags(self.tags)?,
@@ -39,11 +44,12 @@ impl NodeInput {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NodePatch {
     pub name: Option<String>,
     pub ssh_profile: Option<String>,
+    pub ssh_auth: Option<super::ssh_auth::Input>,
     #[serde(default, deserialize_with = "nullable_name")]
     pub host_name: Option<Option<String>>,
     pub kind: Option<NodeKind>,
@@ -53,7 +59,11 @@ pub(super) struct NodePatch {
 
 impl NodePatch {
     pub fn validate(self, local: bool) -> Result<Self, ApiError> {
+        if self.ssh_auth.is_some() && !local {
+            return Err(ApiError::INVALID_INPUT);
+        }
         if self.ssh_profile.is_none()
+            && self.ssh_auth.is_none()
             && self.name.is_none()
             && self.host_name.is_none()
             && self.kind.is_none()
@@ -64,6 +74,7 @@ impl NodePatch {
         }
 
         Ok(Self {
+            ssh_auth: self.ssh_auth,
             ssh_profile: self
                 .ssh_profile
                 .map(|name| profile(name, local))
@@ -156,6 +167,8 @@ pub(super) struct NodeView {
     node: Node,
     host_name: Option<String>,
     ssh_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ssh_auth: Option<super::ssh_auth::View>,
     ssh_error: Option<String>,
     status: NodeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -233,6 +246,7 @@ impl TryFrom<NodeRow> for NodeView {
             },
             host_name: row.host_name,
             ssh_profile: row.ssh_profile,
+            ssh_auth: None,
             ssh_error: row.ssh_error,
             status: row.status,
             metrics: None,
@@ -248,7 +262,9 @@ pub(super) async fn get(pool: &SqlitePool, id: &str) -> Result<NodeView, ApiErro
         .fetch_optional(pool)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
-    node.try_into()
+    let mut view = NodeView::try_from(node)?;
+    view.ssh_auth = super::ssh_auth::view(pool, id).await?;
+    Ok(view)
 }
 
 #[derive(Default)]

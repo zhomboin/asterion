@@ -101,6 +101,18 @@ pub(super) async fn load(local: bool) -> Result<Profiles> {
 }
 
 impl Target {
+    pub(super) fn password_revision(&self) -> Option<&str> {
+        match self {
+            Self::Direct(
+                super::direct::Direct {
+                    auth: super::auth::Auth::Password { revision, .. },
+                    ..
+                },
+                _,
+            ) => Some(revision),
+            _ => None,
+        }
+    }
     pub(super) fn policy(&self) -> &Value {
         match self {
             Self::Profile(profile) => &profile.policy,
@@ -109,8 +121,11 @@ impl Target {
     }
     pub(super) fn command(&self, pty: bool) -> Command {
         let mut command = Command::new("/usr/bin/ssh");
+        command.env_clear();
+        if let Self::Direct(direct, _) = self {
+            direct.auth.configure(&mut command);
+        }
         command
-            .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("TERM", "xterm-256color")
             .args([

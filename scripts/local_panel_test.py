@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from ssh_auth_test import check_auth
 
 
 def check_local_panel(work, stack, user, ssh_port, port, launch, wait):
@@ -38,7 +39,9 @@ Host *
   User {user}
   IdentitiesOnly yes
   UserKnownHostsFile {work}/known_hosts
-Host !minimal *
+Host explicit-key
+  IdentityFile none
+Host !minimal !explicit-key *
   IdentityFile {work}/key
 """)
     config.chmod(0o600)
@@ -48,9 +51,10 @@ Host !minimal *
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
     )
 
-    def request(path, data=None, **headers):
+    def request(path, data=None, method=None, **headers):
         req = urllib.request.Request(
             base + path,
+            method=method,
             data=json.dumps(data).encode() if data is not None else None,
             headers={
                 "Content-Type": "application/json",
@@ -173,3 +177,5 @@ Host !minimal *
         "本机 SSH 终端缺少执行结果",
     )
     print("本机 HTTP 登录、来源校验、SSH 地址与别名、无 Python 采样和交互终端验证通过")
+    check_auth(work, user, ssh_port, request, wait, sample)
+    print("指定私钥、SSH 密码认证、拒绝后暂停及更换密码验证通过")

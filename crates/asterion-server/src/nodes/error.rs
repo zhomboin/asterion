@@ -17,6 +17,16 @@ struct ErrorBody {
 }
 
 impl ApiError {
+    pub const INVALID_KEY_PATH: Self = Self {
+        status: StatusCode::BAD_REQUEST,
+        code: "invalid_identity_file",
+        message: "找不到本机私钥文件，请填写 Linux 绝对路径或以 ~/ 开头的路径",
+    };
+    pub const INVALID_PASSWORD: Self = Self {
+        status: StatusCode::BAD_REQUEST,
+        code: "invalid_ssh_password",
+        message: "请输入此 SSH 用户的服务器密码",
+    };
     pub const INVALID_INPUT: Self = Self {
         status: StatusCode::BAD_REQUEST,
         code: "invalid_node_input",

@@ -90,6 +90,9 @@ pub(super) async fn create(
     .execute(&mut *tx)
     .await?;
 
+    if let Some(auth) = input.ssh_auth {
+        auth.save(&mut tx, &id, false).await?;
+    }
     model::audit(&mut tx, &session.username, &id, "node_create").await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(model::get(&pool, &id).await?)))
@@ -109,20 +112,26 @@ pub(super) async fn update(
     let kind = input.kind.map(|kind| kind.as_str());
     let tags = input.tags.as_deref().map(model::tags_json).transpose()?;
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let existing_kind = sqlx::query_scalar::<_, String>("SELECT kind FROM nodes WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    if let Some(profile) = &input.ssh_profile {
-        let bound: Option<String> =
-            sqlx::query_scalar("SELECT ssh_profile FROM nodes WHERE id = ?")
-                .bind(&id)
-                .fetch_one(&mut *tx)
-                .await?;
-        if bound.is_some_and(|current| current != *profile) {
-            return Err(ApiError::INVALID_INPUT);
-        }
+    let (existing_kind, bound) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT kind, ssh_profile FROM nodes WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ApiError::NOT_FOUND)?;
+    let effective = input.ssh_profile.as_deref().or(bound.as_deref());
+    let changed = effective != bound.as_deref();
+    if input.ssh_auth.is_some() && !effective.is_some_and(|s| s.starts_with("ssh://")) {
+        return Err(ApiError::INVALID_INPUT);
+    }
+    if changed
+        && let Some(previous) = bound.as_deref()
+        && !(previous.starts_with("ssh://") && input.ssh_auth.is_some())
+    {
+        return Err(ApiError::INVALID_INPUT);
+    }
+    if let Some(auth) = input.ssh_auth {
+        auth.save(&mut tx, &id, !changed).await?;
     }
     let effective_kind = kind.unwrap_or(&existing_kind);
     let host_id = match input.host_name.as_ref().and_then(|name| name.as_deref()) {
@@ -136,7 +145,9 @@ pub(super) async fn update(
              tags = COALESCE(?, tags), notes = COALESCE(?, notes),
              wsl_distro = CASE WHEN ? = 'linux' THEN NULL ELSE wsl_distro END,
              host_id = CASE WHEN ? THEN ? ELSE host_id END,
-             ssh_profile = COALESCE(?, ssh_profile), updated_at = unixepoch()
+             ssh_profile = COALESCE(?, ssh_profile), updated_at = unixepoch(),
+             ssh_online_until = CASE WHEN ? THEN NULL ELSE ssh_online_until END,
+             ssh_error = CASE WHEN ? THEN NULL ELSE ssh_error END
          WHERE id = ?",
     )
     .bind(&input.name)
@@ -147,6 +158,8 @@ pub(super) async fn update(
     .bind(replace_host)
     .bind(host_id)
     .bind(&input.ssh_profile)
+    .bind(changed)
+    .bind(changed)
     .bind(&id)
     .execute(&mut *tx)
     .await?;

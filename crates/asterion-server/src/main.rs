@@ -11,8 +11,15 @@ use axum_server::Handle;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
+fn main() -> Result<()> {
+    if asterion_server::ssh::is_askpass() {
+        return asterion_server::ssh::askpass();
+    }
+    run()
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn run() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()

@@ -19,7 +19,7 @@
    bash start.sh
    ```
 
-3. 首次启动时在终端设置本机面板口令。浏览器打开打印出的地址，使用账号 `local` 登录。在「节点 → 接入服务器」输入同一 Linux 用户能登录的 SSH 地址或别名。进入「指标」核对采样，在「终端」验证只读命令 `uptime`。
+3. 首次启动时在终端设置本机面板口令。浏览器打开打印出的地址，使用账号 `local` 登录。在「节点 → 接入服务器」填主机、远端端口和用户名，选择密码、私钥或本机 SSH 配置。进入「指标」核对采样，在「终端」验证只读命令 `uptime`。
 4. 修改前端时，可在另一个终端执行下列命令，随后刷新浏览器。修改 Rust 代码后，在启动终端按 Ctrl+C，再运行 `bash start.sh`。
 
    ```bash
@@ -37,6 +37,13 @@ python3 -B -m unittest discover -s deploy/ssh
 python3 -B -m unittest discover -s deploy/managed
 npm --prefix web run check
 npm --prefix web test
+```
+
+验证节点认证时，先构建后端，再运行 SSH 集成测试。测试使用本机回环端口、临时密钥和一次性密码，需要本机测试环境提供 OpenSSH 服务端程序及 Python Paramiko。
+
+```bash
+cargo build --locked -p asterion-server
+TEST_CENTER="${CARGO_TARGET_DIR:-target}/debug/asterion-server" /usr/bin/python3 -B scripts/test_ssh.py
 ```
 
 ## 构建和验证本机运行包

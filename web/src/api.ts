@@ -23,6 +23,7 @@ export interface Node extends NodeDraft {
   arch: string | null;
   wsl_distro: string | null;
   ssh_profile: string | null;
+  ssh_auth?: { method: 'key' | 'password'; identity_file?: string };
   ssh_error: string | null;
   last_seen_at: number | null;
   status: 'pending' | 'online' | 'offline';

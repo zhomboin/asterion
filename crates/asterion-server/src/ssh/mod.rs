@@ -1,3 +1,5 @@
+mod auth;
+pub use auth::{askpass, is_askpass};
 mod config;
 mod direct;
 mod pty;
@@ -52,6 +54,14 @@ impl Drop for Worker {
 pub async fn serve(pool: SqlitePool, bus: Arc<SshBus>, mut shutdown: watch::Receiver<bool>) {
     let mut workers: HashMap<String, Worker> = HashMap::new();
     let slots = Arc::new(Semaphore::new(32));
+    let Ok(database) =
+        sqlx::query_scalar::<_, String>("SELECT file FROM pragma_database_list WHERE name='main'")
+            .fetch_one(&pool)
+            .await
+    else {
+        tracing::error!("无法读取 SSH 凭据数据库的位置");
+        return;
+    };
     let mut tick = interval(Duration::from_secs(3));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
@@ -59,37 +69,40 @@ pub async fn serve(pool: SqlitePool, bus: Arc<SshBus>, mut shutdown: watch::Rece
             _ = shutdown.changed() => break,
             _ = tick.tick() => {}
         }
-        let mut profiles = config::load(true).await.unwrap_or_default();
-        let Ok(nodes) = sqlx::query_as::<_, (String, String)>(
-            "SELECT id, ssh_profile FROM nodes WHERE ssh_profile IS NOT NULL",
-        )
-        .fetch_all(&pool)
-        .await
-        else {
+        let profiles = config::load(true).await.unwrap_or_default();
+        let Ok(nodes) = auth::load(&pool, database.as_ref()).await else {
             continue;
         };
-        for (_, name) in &nodes {
-            if let Some(direct) = direct::Direct::parse(name) {
-                profiles
-                    .entry(name.clone())
-                    .or_insert_with(|| Target::Direct(direct, Value::Null));
+        let mut targets = HashMap::new();
+        for (id, name, auth) in nodes {
+            let target = if let Some(mut direct) = direct::Direct::parse(&name) {
+                if auth == auth::Auth::Paused {
+                    continue;
+                }
+                direct.auth = auth;
+                Some(Target::Direct(
+                    direct,
+                    profiles
+                        .get(&name)
+                        .map_or(Value::Null, |p| p.policy().clone()),
+                ))
+            } else {
+                profiles.get(&name).cloned()
+            };
+            if let Some(target) = target {
+                targets.insert(id, target);
+            } else {
+                let _ = sqlx::query("UPDATE nodes SET ssh_error='中心找不到此 SSH 配置', ssh_online_until=MIN(COALESCE(ssh_online_until,unixepoch()),unixepoch()) WHERE id=? AND ssh_error IS NOT '中心找不到此 SSH 配置'")
+                    .bind(&id).execute(&pool).await;
             }
         }
         workers.retain(|id, worker| {
-            !worker.task.is_finished()
-                && nodes.iter().any(|(node, profile)| {
-                    node == id && profiles.get(profile) == Some(&worker.target)
-                })
+            !worker.task.is_finished() && targets.get(id) == Some(&worker.target)
         });
-        for (id, name) in nodes {
+        for (id, target) in targets {
             if workers.contains_key(&id) {
                 continue;
             }
-            let Some(target) = profiles.get(&name) else {
-                let _ = sqlx::query("UPDATE nodes SET ssh_error='中心找不到此 SSH 配置', ssh_online_until=MIN(COALESCE(ssh_online_until,unixepoch()),unixepoch()) WHERE id=? AND ssh_error IS NOT '中心找不到此 SSH 配置'")
-                    .bind(&id).execute(&pool).await;
-                continue;
-            };
             let task = tokio::spawn(site(
                 pool.clone(),
                 bus.clone(),
@@ -97,13 +110,7 @@ pub async fn serve(pool: SqlitePool, bus: Arc<SshBus>, mut shutdown: watch::Rece
                 id.clone(),
                 target.clone(),
             ));
-            workers.insert(
-                id,
-                Worker {
-                    target: target.clone(),
-                    task,
-                },
-            );
+            workers.insert(id, Worker { target, task });
         }
     }
 }
@@ -240,7 +247,15 @@ async fn terminal(
 
 async fn sample(pool: &SqlitePool, id: &str, target: &Target, period: u64) {
     let response = transport::call(target, "sample", json!({}), 10, None).await;
-    if let Err(error) = save_sample(pool, id, period, response).await {
+    let result = if let TaskReply::Failure { code, .. } = &response
+        && code == "password_denied"
+        && let Some(revision) = target.password_revision()
+    {
+        auth::pause_password(pool, id, revision).await
+    } else {
+        save_sample(pool, id, period, response).await
+    };
+    if let Err(error) = result {
         tracing::warn!(%error,node_id=id,"无法保存 SSH 采样");
     }
 }
@@ -265,7 +280,7 @@ async fn save_sample(
     }
     let message = match &reply {
         TaskReply::Failure { code, .. } if code == "offline" => {
-            "SSH 连接失败，请核对地址、主机密钥和账号密钥"
+            "SSH 连接失败，请核对地址、端口、已信任的主机指纹和登录凭据"
         }
         TaskReply::Failure { code, .. } if code == "timeout" => "SSH 采样超时",
         _ => "SSH 采样失败，请检查节点 Python 3 与 /proc 读取权限",
