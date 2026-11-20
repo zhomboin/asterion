@@ -64,7 +64,7 @@ sudo systemctl start asterion-server
 curl --fail 'https://<面板域名>/healthz'
 ```
 
-在面板逐个为原节点绑定 SSH 配置。确认采样和实际需要的操作通过后，可在相应服务器执行 `systemctl list-unit-files 'asterion*'` 核对以前安装的节点服务，再对确认退役的服务逐个执行 `sudo systemctl disable --now '<节点服务名>'`。保留中心的 `asterion-server.service`。
+在面板逐个为原节点绑定 SSH 配置。对已有受管容器，核实 Docker Engine 和容器的完整 ID，将其填入连接策略后再开启容器操作。确认采样和实际需要的操作通过后，可在相应服务器执行 `systemctl list-unit-files 'asterion*'` 核对以前安装的节点服务，再对确认退役的服务逐个执行 `sudo systemctl disable --now '<节点服务名>'`。保留中心的 `asterion-server.service`。
 
 ## 备份和恢复
 

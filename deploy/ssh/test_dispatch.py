@@ -1,7 +1,11 @@
+import fcntl
 import os
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "managed"))
 import actions
@@ -61,3 +65,66 @@ class Requests(unittest.TestCase):
         self.assertEqual(
             self.send("account_keys", {"username": "root"})["code"], "operation_denied"
         )
+
+    def test_command_paths(self):
+        shell = Path("/bin/sh")
+        self.assertEqual(actions.command_path(str(shell)), shell.resolve(strict=True))
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            alias = Path(tmp) / "tool"
+            alias.symlink_to(shell)
+            for path in (str(alias), "bin/sh", "/etc/passwd"):
+                with self.subTest(path=path), self.assertRaises(actions.Refused):
+                    actions.command_path(path)
+
+    def test_managed_change_refuses_concurrent_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with (
+                    patch.object(actions, "state_dir", return_value=Path(tmp)),
+                    patch.object(actions.host, "install") as install,
+                ):
+                    args = {
+                        "action": {
+                            "type": "managed",
+                            "change": {"key": "tool", "verb": "install"},
+                        }
+                    }
+                    policy = {"managed": {"packages": {"tool": {"package": "tool"}}}}
+                    self.assertEqual(
+                        self.send("operation_execute", args, policy)["code"], "busy"
+                    )
+                    install.assert_not_called()
+            finally:
+                os.close(fd)
+
+    def test_disconnect_finishes_managed_change_and_stops_command(self):
+        script = """
+import sys, time
+from pathlib import Path
+import dispatch
+def mark(request):
+    time.sleep(0.15)
+    Path(sys.argv[2]).touch()
+    return {}
+dispatch.run = mark
+dispatch.main({"kind": "operation_execute", "args": {"action": {"type": sys.argv[1]}}, "seconds": 3})
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            for kind in ("managed", "command"):
+                with self.subTest(kind=kind):
+                    marker = Path(tmp) / kind
+                    subprocess.run(
+                        [sys.executable, "-B", "-c", script, kind, marker],
+                        cwd=Path(__file__).parent,
+                        env={
+                            **os.environ,
+                            "PYTHONPATH": str(Path(actions.host.__file__).parent),
+                        },
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        check=True,
+                        timeout=5,
+                    )
+                    self.assertEqual(marker.exists(), kind == "managed")

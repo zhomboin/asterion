@@ -69,7 +69,11 @@ def run(request):
 
 
 def main(request):
-    # SSH 输入关闭或请求超时后，清理本次调用产生的进程组。
+    # 普通查询和命令随 SSH 关闭。已确认的受管变更在时限内完成核验或回滚。
+    managed = (
+        request["kind"] == "operation_execute"
+        and request["args"]["action"]["type"] == "managed"
+    )
     pid = os.fork()
     if not pid:
         os.setpgid(0, 0)
@@ -82,7 +86,9 @@ def main(request):
         while time.monotonic() < end:
             if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG):
                 break
-            if select.select([sys.stdin], [], [], 0.05)[0] and not os.read(0, 1):
+            if managed:
+                time.sleep(0.05)
+            elif select.select([sys.stdin], [], [], 0.05)[0] and not os.read(0, 1):
                 break
     finally:
         try:
