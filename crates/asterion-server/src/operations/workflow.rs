@@ -33,12 +33,16 @@ pub(super) async fn managed(
     Path((node, group)): Path<(String, String)>,
     axum::extract::Query(selection): axum::extract::Query<Selection>,
 ) -> Result<Json<Value>, ApiError> {
-    if !matches!(group.as_str(), "configs" | "packages" | "containers")
-        || selection
-            .key
-            .as_deref()
-            .is_some_and(|key| !asterion_protocol::operation::valid_identifier(key, 64))
-    {
+    let key = selection.key.as_deref();
+    let valid = match group.as_str() {
+        "files" => key.is_some_and(asterion_protocol::managed::valid_file_path),
+        "nginx" => key.is_none_or(asterion_protocol::managed::valid_file_path),
+        "configs" | "packages" | "containers" => {
+            key.is_none_or(|k| asterion_protocol::operation::valid_identifier(k, 64))
+        }
+        _ => false,
+    };
+    if !valid {
         return Err(ApiError::INVALID);
     }
     node_name(&pool, &node).await?;
@@ -49,7 +53,11 @@ pub(super) async fn managed(
     )
     .await
     .map(Json)
-    .map_err(bus_error)
+    .map_err(if matches!(group.as_str(), "files" | "nginx") {
+        super::error::file_error
+    } else {
+        bus_error
+    })
 }
 
 #[derive(Serialize)]
@@ -368,8 +376,13 @@ fn hash(challenge: &str) -> [u8; 32] {
 fn content_matches(action: &OperationAction, content: Option<&str>) -> bool {
     match action {
         OperationAction::Managed { change } if change.digest.is_some() => {
+            let limit = if change.verb.kind() == "files" {
+                64 * 1024
+            } else {
+                8192
+            };
             content.is_some_and(|text| {
-                text.len() <= 8192
+                text.len() <= limit
                     && !text.contains('\0')
                     && change.digest.as_deref()
                         == Some(&format!("{:x}", Sha256::digest(text.as_bytes())))

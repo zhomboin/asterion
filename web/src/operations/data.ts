@@ -17,6 +17,7 @@ export type OperationAction =
 export const managedLabels = {
   install: '安装软件', save_reload: '保存并应用配置', create: '创建容器', recreate: '重建容器',
   start: '启动容器', stop: '停止容器', restart: '重启容器',
+  save_text: '保存文件', save_nginx: '保存并重载 Nginx',
 };
 
 export type ManagedChange = {
@@ -36,6 +37,7 @@ export type CommandParameter =
 export type Command = { name: string; timeout_seconds: number; parameters: CommandParameter[] };
 
 export type OperationCatalog = {
+  file_editor?: boolean;
   managed?: string[];
   enabled: boolean;
   systemd_units: string[];
@@ -95,6 +97,13 @@ export const operationStates: Record<OperationState, string> = {
   cancelled: '已取消',
   interrupted: '已中断',
   expired: '已过期',
+};
+
+export const fileErrors: Record<string, string> = {
+  ssh_target_changed: '远程文件或实例已变化，请复制需要保留的修改，再重新读取。',
+  ssh_permission_denied: '请检查 SSH 账号对文件、所在目录和备份目录的权限。',
+  ssh_file_hardlink: '目标有多个硬链接，无法原子保存。',
+  ssh_nginx_unavailable: '无法复核 Nginx 实例或配置。请刷新配置清单，检查 nginx -T 和 SSH 账号权限。',
 };
 
 export const serviceVerbs = ['start', 'stop', 'restart'] as const;

@@ -191,6 +191,9 @@ impl Outcome {
                     Self::with_error("failed", "ssh_target_changed")
                 }
                 "invalid_argument" => Self::with_error("failed", "ssh_invalid_change"),
+                "file_hardlink" => Self::with_error("failed", "ssh_file_hardlink"),
+                "nginx_missing" | "nginx_multiple" | "nginx_dump" | "nginx_check"
+                | "nginx_arguments" => Self::with_error("failed", "ssh_nginx_unavailable"),
                 "ssh_busy" => Self::with_error("failed", "ssh_busy"),
                 "conflict" if account_change => Self::with_error("failed", "ssh_account_conflict"),
                 "not_found" if account_change => {

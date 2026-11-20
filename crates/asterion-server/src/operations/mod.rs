@@ -22,5 +22,5 @@ pub fn routes() -> Router<SqlitePool> {
         .route("/api/v1/operations/{id}", get(storage::get))
         .route("/api/v1/operations/{id}/confirm", post(workflow::confirm))
         .route("/api/v1/operations/{id}/cancel", post(workflow::cancel))
-        .layer(DefaultBodyLimit::max(52 * 1024))
+        .layer(DefaultBodyLimit::max(140 * 1024))
 }

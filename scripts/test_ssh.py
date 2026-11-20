@@ -70,6 +70,7 @@ KbdInteractiveAuthentication no
 UsePAM no
 AllowUsers {user}
 DisableForwarding yes
+SetEnv HOME={work}
 """)
     sshd = launch(
         stack,

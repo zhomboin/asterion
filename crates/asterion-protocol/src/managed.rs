@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub enum ManagedVerb {
     Install,
     SaveReload,
+    SaveText,
+    SaveNginx,
     Create,
     Recreate,
     Start,
@@ -17,9 +19,14 @@ impl ManagedVerb {
         match self {
             Self::Install => "packages",
             Self::SaveReload => "configs",
+            Self::SaveText | Self::SaveNginx => "files",
             _ => "containers",
         }
     }
+}
+
+pub fn valid_file_path(path: &str) -> bool {
+    path.starts_with('/') && path.len() <= 1024 && !path.chars().any(char::is_control)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -46,6 +53,10 @@ pub struct ContainerSettings {
 
 impl ManagedAction {
     pub fn valid(&self) -> bool {
+        let valid_key = match self.verb {
+            ManagedVerb::SaveText | ManagedVerb::SaveNginx => valid_file_path(&self.key),
+            _ => super::operation::valid_identifier(&self.key, 64),
+        };
         self.settings.as_ref().is_none_or(|value| {
             matches!(self.verb, ManagedVerb::Create | ManagedVerb::Recreate)
                 && matches!(
@@ -59,10 +70,10 @@ impl ManagedAction {
                     .mounts
                     .iter()
                     .all(|name| super::operation::valid_identifier(name, 64))
-        }) && super::operation::valid_identifier(&self.key, 64)
+        }) && valid_key
             && super::is_lower_hex(&self.revision, 64)
             && match self.verb {
-                ManagedVerb::SaveReload => {
+                ManagedVerb::SaveReload | ManagedVerb::SaveText | ManagedVerb::SaveNginx => {
                     self.profile.is_none()
                         && self
                             .digest

@@ -39,7 +39,13 @@ npm --prefix web run check
 npm --prefix web test
 ```
 
-验证节点认证时，先构建后端，再运行 SSH 集成测试。测试使用本机回环端口、临时密钥和一次性密码，需要本机测试环境提供 OpenSSH 服务端程序及 Python Paramiko。
+验证 Nginx 配置编辑时，把 `TEST_NGINX` 指向可执行的 Nginx 程序。测试在项目的临时目录启动独立实例，检查引用清单、重载及错误回滚，结束后关闭实例。
+
+```bash
+TEST_NGINX="$(command -v nginx)" python3 -B -m unittest discover -s deploy/ssh -p test_text_files.py
+```
+
+验证节点认证和文件保存时，先构建后端，再运行 SSH 集成测试。测试使用本机回环端口、临时密钥和一次性密码，需要本机测试环境提供 OpenSSH 服务端程序及 Python Paramiko。
 
 ```bash
 cargo build --locked -p asterion-server

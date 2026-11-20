@@ -3,7 +3,7 @@ import { errorMessage, isUnauthorized, request } from '../api';
 import { Timestamp } from '../ui';
 import { operationName, operationTarget, type AccountChange, type OperationAction, type PreparedOperation } from './data';
 
-export function ProposalDialog({ nodeId, nodeName, action, resourceName, content, onClose, onExpired }: {
+export function ProposalDialog({ nodeId, nodeName, action, resourceName, content, onClose, onExpired, onConfirmed }: {
   nodeId: string;
   nodeName: string;
   action: OperationAction;
@@ -11,6 +11,7 @@ export function ProposalDialog({ nodeId, nodeName, action, resourceName, content
   content?: string;
   onClose: () => void;
   onExpired: () => void;
+  onConfirmed?: (id: string) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [prepared, setPrepared] = useState<PreparedOperation>();
@@ -52,7 +53,8 @@ export function ProposalDialog({ nodeId, nodeName, action, resourceName, content
         : { challenge: prepared.challenge };
       const path = '/operations/' + encodeURIComponent(prepared.task_id);
       await request(path + '/confirm', { method: 'POST', body, response: 'empty' });
-      window.location.assign(path);
+      if (onConfirmed) onConfirmed(prepared.task_id);
+      else window.location.assign(path);
     } catch (failure) {
       if (isUnauthorized(failure)) onExpired();
       else setError(errorMessage(failure));

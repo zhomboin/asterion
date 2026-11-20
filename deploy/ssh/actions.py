@@ -15,6 +15,8 @@ import accounts
 import containers
 import host
 import monitor
+import nginx_config
+import text_files
 from common import Refused, command, fixed_path, key_ok, redact, require, result
 
 
@@ -35,6 +37,7 @@ def catalog(policy):
     account = policy.get("accounts", {})
     return dict(
         enabled=True,
+        file_editor=policy.get("file_editor") is True,
         managed=list(policy.get("managed", {})),
         systemd_units=policy.get("systemd_units", []),
         docker_targets=policy.get("docker_targets", []),
@@ -65,6 +68,12 @@ def entry(policy, group, key):
 
 def managed_query(policy, args):
     group, key = args["group"], args.get("key")
+    if group in ("files", "nginx"):
+        require(policy.get("file_editor") is True)
+        if key is None:
+            require(group == "nginx", "invalid_argument")
+            return dict(paths=nginx_config.paths(nginx_config.master()))
+        return text_files.view(key, group == "nginx")
     if key is None:
         return dict(keys=sorted(policy.get("managed", {}).get(group, {})))
     spec = entry(policy, group, key)
@@ -78,7 +87,11 @@ def managed_query(policy, args):
 def managed(policy, change, content):
     key, verb = change["key"], change["verb"]
     group = {"install": "packages", "save_reload": "configs"}.get(verb, "containers")
-    spec = entry(policy, group, key)
+    if verb in ("save_text", "save_nginx"):
+        require(policy.get("file_editor") is True)
+        group = "files"
+    else:
+        spec = entry(policy, group, key)
     state = state_dir()
     fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -86,6 +99,8 @@ def managed(policy, change, content):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise Refused("busy") from None
+        if group == "files":
+            return text_files.save(change, content, state)
         if group == "packages":
             return host.install(key, spec, change)
         if group == "configs":
