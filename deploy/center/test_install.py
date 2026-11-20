@@ -32,8 +32,6 @@ class InstallTests(unittest.TestCase):
             "port": "18080",
             "domain": "panel.example.test",
             "node": "",
-            "agent": "",
-            "admin_ip": "192.0.2.1",
             "ops": "operator",
             "revision": "abc",
             "sha256": "a" * 64,
@@ -96,6 +94,32 @@ class InstallTests(unittest.TestCase):
         self.assertNotIn("SSH_DEPLOY", host.server_config(self.c))
         self.c["node"] = "192.0.2.2"
         self.assertIn("NETWORKS=192.0.2.2/32\n", host.server_config(self.c))
+
+    def test_settings_do_not_prompt_for_client_addresses(self):
+        for node in ("", "192.0.2.2"):
+            with patch(
+                "builtins.input", side_effect=["panel.example.test", "", node, "ops"]
+            ) as read:
+                settings = inputs.settings()
+                self.assertEqual(set(settings), {"domain", "port", "node", "ops"})
+                self.assertEqual(settings["node"], node)
+                self.assertEqual(read.call_count, 4)
+
+    def test_first_certificate_uses_http_without_dns_credentials(self):
+        with (
+            patch.object(host, "LE", self.root),
+            patch.object(host, "ask", return_value="admin@example.test") as ask,
+            patch.object(
+                host, "run", side_effect=subprocess.CalledProcessError(1, "certbot")
+            ) as run,
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            host.public_tls(self.c)
+        ask.assert_called_once()
+        self.assertIn("--nginx", run.call_args.args)
+        self.assertIn("http-01", run.call_args.args)
+        self.assertIn("admin@example.test", run.call_args.args)
+        self.assertFalse(list(self.root.iterdir()))
 
     def test_different_file_or_dangling_link_is_preserved(self):
         path = self.root / "config"

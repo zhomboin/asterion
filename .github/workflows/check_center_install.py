@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -62,36 +63,6 @@ def make_archive(work):
     return archive
 
 
-def public_certificate(domain):
-    cert = host.LE / "live" / domain
-    cert.mkdir(parents=True)
-    run(
-        "openssl",
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-days",
-        "1",
-        "-subj",
-        "/CN=" + domain,
-        "-addext",
-        "subjectAltName=DNS:" + domain,
-        "-addext",
-        "basicConstraints=critical,CA:TRUE",
-        "-keyout",
-        cert / "privkey.pem",
-        "-out",
-        cert / "fullchain.pem",
-    )
-    host.put(host.LE / "renewal" / (domain + ".conf"), "# 本机测试证书\n")
-    shutil.copyfile(
-        cert / "fullchain.pem", "/usr/local/share/ca-certificates/asterion-ci.crt"
-    )
-    run("update-ca-certificates")
-
-
 def main():
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.geteuid() != 0:
         sys.exit("此测试只在一次性 GitHub Actions 虚拟机运行。")
@@ -116,11 +87,8 @@ def main():
         "port": "18080",
         "ops": ops,
         "domain": domain,
-        "admin_ip": "192.0.2.1",
         "node": "",
-        "agent": "",
     }
-    public_certificate(domain)
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", work / "key")
@@ -141,15 +109,16 @@ def main():
         original_run = host.run
 
         def local_commands(*args, **kwargs):
-            if args[:2] == ("certbot", "renew"):
-                assert args == ("certbot", "renew", "--cert-name", domain, "--dry-run")
-                print("公网 ACME 验证在隔离环境中跳过。")
-                return None
+            if args[0] == "certbot":
+                return original_run(
+                    *args, "--server", "https://localhost:14000/dir", **kwargs
+                )
             return original_run(*args, **kwargs)
 
         with (
             patch.object(install, "settings", return_value=prompt),
             patch.object(host, "run", side_effect=local_commands),
+            patch.object(host, "ask", return_value="admin@example.invalid") as email,
             patch.object(
                 services, "password", return_value=secrets.token_hex(24)
             ) as password,
@@ -173,10 +142,48 @@ def main():
                     ).stdout
 
                 before = [pid(unit) for unit in (host.SERVER, host.AGENT)]
-                # 模拟手动部署到服务已上线，只有安装器自己的进度文件缺失。
+
+                def status(path, source):
+                    return run(
+                        "curl",
+                        "-sS",
+                        "--noproxy",
+                        "*",
+                        "--interface",
+                        source,
+                        "--resolve",
+                        f"{domain}:443:127.0.0.1",
+                        "-o",
+                        os.devnull,
+                        "-w",
+                        "%{http_code}",
+                        f"https://{domain}{path}",
+                        capture_output=True,
+                    ).stdout
+
+                def wait_access(expected):
+                    for _ in range(25):
+                        if status("/api/v1/me", "127.0.0.2") == expected:
+                            return
+                        time.sleep(0.2)
+                    raise AssertionError(f"管理 API 未返回 {expected!r}")
+
+                # 从有标准 IP 限制的手动站点续装，确认动态地址仍需要登录。
+                host.replace_text(
+                    host.site_path(prompt),
+                    host.site_config(prompt, allowed=["127.0.0.1", "192.0.2.1"]),
+                )
+                run("systemctl", "reload", "nginx")
+                wait_access(b"403")
                 install.STATE.unlink()
                 install.DONE.unlink()
                 install.provision(archive)
+                wait_access(b"401")
+                attempts = [status("/api/v1/auth/login", "127.0.0.2") for _ in range(8)]
+                assert attempts[0] == b"405" and b"429" in attempts
+                assert status("/api/v1/auth/login", "127.0.0.3") == b"405"
+                assert status("/healthz", "127.0.0.2") == b"200"
+                local_commands("certbot", "renew", "--cert-name", domain, "--dry-run")
                 assert [pid(unit) for unit in (host.SERVER, host.AGENT)] == before
                 assert (
                     services.IDENTITY.read_bytes() == identity
@@ -188,6 +195,7 @@ def main():
                 )
                 ca.assert_called_once()
                 password.assert_called_once()
+                email.assert_called_once()
             finally:
                 subprocess.run(
                     [

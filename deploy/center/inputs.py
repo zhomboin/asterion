@@ -48,15 +48,11 @@ def settings(known=None):
         lambda s: re.fullmatch(r"[1-9][0-9]{4}", s) and int(s) <= 65535,
         "18080",
     )
-    admin_ip = known.get("admin_ip") or ask("允许访问面板的管理电脑出口 IPv4", ipv4)
     node = known.get("node")
     if node is None:
         node = ask(
             "允许 SSH 部署的节点 IPv4（只部署中心可留空）", lambda s: not s or ipv4(s)
         )
-    agent = known.get("agent") or (
-        ask("节点访问中心的出口 IPv4", ipv4, node) if node else ""
-    )
     ops = ask(
         "复用或新建的个人 Linux 运维用户名",
         lambda s: re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", s),
@@ -65,9 +61,7 @@ def settings(known=None):
     return {
         "domain": domain,
         "port": port,
-        "admin_ip": admin_ip,
         "node": node,
-        "agent": agent,
         "ops": ops,
     }
 
