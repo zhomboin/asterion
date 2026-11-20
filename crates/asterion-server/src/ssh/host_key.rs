@@ -57,6 +57,19 @@ pub fn is_confirmation_helper() -> bool {
     std::env::var_os(PROBE).is_some()
 }
 
+fn prompt_key(line: &str) -> Option<(&str, &str)> {
+    let (algorithm, rest) = line.split_once(" key fingerprint is")?;
+    let fingerprint = rest.strip_prefix(": ").or_else(|| rest.strip_prefix(' '))?;
+    let fingerprint = fingerprint.strip_suffix('.').unwrap_or(fingerprint);
+    (algorithm.len() <= 64
+        && !algorithm.is_empty()
+        && algorithm
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && valid_fingerprint(fingerprint))
+    .then_some((algorithm, fingerprint))
+}
+
 pub fn answer_prompt() -> Result<()> {
     auth::verify_askpass_owner()?;
     let prompt = std::env::args_os().nth(1).unwrap_or_default();
@@ -68,15 +81,7 @@ pub fn answer_prompt() -> Result<()> {
     );
     let (algorithm, fingerprint) = prompt
         .lines()
-        .find_map(|line| line.strip_suffix('.')?.split_once(" key fingerprint is "))
-        .filter(|(algorithm, fp)| {
-            !algorithm.is_empty()
-                && algorithm.len() <= 64
-                && algorithm
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-                && valid_fingerprint(fp)
-        })
+        .find_map(prompt_key)
         .ok_or_else(|| anyhow::anyhow!("无法读取 SSH 主机指纹"))?;
     eprintln!("{} {algorithm} {fingerprint}", std::env::var(PROBE)?);
     let accept = std::env::var(ACCEPT).ok();
@@ -257,4 +262,25 @@ async fn probe(
         }
     }
     Err(failed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_openssh_fingerprint_lines() {
+        let fp = format!("SHA256:{}", STANDARD_NO_PAD.encode([0; 32]));
+        for line in [
+            format!("ED25519 key fingerprint is {fp}."),
+            format!("ED25519 key fingerprint is: {fp}"),
+        ] {
+            assert_eq!(prompt_key(&line), Some(("ED25519", fp.as_str())));
+        }
+        assert_eq!(prompt_key("ED25519 key fingerprint is: SHA256:short"), None);
+        assert_eq!(
+            prompt_key(&format!("ED25519 key fingerprint is: {fp} extra")),
+            None
+        );
+    }
 }
