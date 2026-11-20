@@ -5,6 +5,7 @@ import json
 import secrets
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import time
 import unittest
@@ -33,8 +34,6 @@ class AdoptionTests(unittest.TestCase):
             "port": "18080",
             "ops": "test-ops",
             "node": "192.0.2.2",
-            "agent": "192.0.2.9",
-            "admin_ip": "192.0.2.9",
         }
 
     def test_manual_account_needs_neither_key_nor_adduser(self):
@@ -59,7 +58,7 @@ class AdoptionTests(unittest.TestCase):
                 run.call_args_list, [call("visudo", "-cf", self.root / "sudoers")] * 2
             )
 
-    def test_env_and_manual_acl_are_detected_and_preserved(self):
+    def test_env_preserved_and_standard_site_migrated(self):
         env = self.config / "server.env"
         lines = host.server_config(self.c).splitlines()
         original = "# 保留注释\n" + "\n".join(reversed(lines[1:])) + "\n"
@@ -68,17 +67,28 @@ class AdoptionTests(unittest.TestCase):
         self.assertEqual(env.read_text(), original + lines[0] + "\n")
         with patch.object(host, "SITES", self.root):
             site = host.site_path(self.c)
-            text = host.site_config(self.c).replace(
-                "    deny all;", f"    allow {self.c['agent']};\n    deny all;"
+            text = host.site_config(
+                self.c, allowed=["127.0.0.1", "192.0.2.9", "192.0.2.9"]
             )
             host.put(site, text, 0o644)
             hints = existing.hints(self.config, self.root, self.root)
-            for key in ("domain", "port", "node", "agent", "admin_ip"):
+            for key in ("domain", "port", "node"):
                 self.assertEqual(hints[key], self.c[key])
+            with (
+                patch.object(
+                    host, "run", side_effect=subprocess.CalledProcessError(1, "nginx")
+                ),
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                host.enable_site(self.c, lambda: True)
+            self.assertEqual(site.read_text(), text)
             with patch.object(host, "run") as run:
                 host.enable_site(self.c, lambda: True)
+                run.assert_any_call("systemctl", "reload", "nginx")
+                self.assertEqual(site.read_text(), host.site_config(self.c))
+                run.reset_mock()
+                host.enable_site(self.c, lambda: True)
                 run.assert_not_called()
-            self.assertEqual(site.read_text(), text)
             site.write_text(text.replace("deny all;", "allow all;"))
             with self.assertRaises(ValueError):
                 host.check_existing_site(self.c)

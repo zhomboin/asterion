@@ -10,15 +10,17 @@
 bash deploy/install-center.sh
 ```
 
-目标系统为使用 systemd 的 Ubuntu 22.04 或 24.04。先将面板域名的 A 记录指向中心 IPv4，并允许管理电脑访问 HTTPS。使用包含本安装向导的项目检出目录。向导会在当前目录和运行账号的家目录查找 `asterion-*.tar.gz`，校验文件须与包放在一起。找到一个包会直接使用；找到多个包会列出路径供选择。包放在其他目录时，可按第 1 节显式指定路径。
+目标系统为使用 systemd 的 Ubuntu 22.04 或 24.04。先将面板域名的 A 记录指向中心 IPv4，确保公网 TCP 80 可以到达中心 Nginx，TCP 443 用于面板和 Agent。使用包含本安装向导的项目检出目录。向导会在当前目录和运行账号的家目录查找 `asterion-*.tar.gz`，校验文件须与包放在一起。找到一个包会直接使用；找到多个包会列出路径供选择。包放在其他目录时，可按第 1 节显式指定路径。
 
 只有 root 账号也可以从头安装。找不到发布包时，脚本会安装构建依赖，从当前提交编译并打包，然后继续部署。也可以用有 sudo 权限的普通用户执行同一条命令。
 
-向导询问的是日常运维用户名。已经手动创建过账号，就填写原用户名，向导会复用账号和 SSH 公钥；首次安装可填写要创建的普通用户名。向导会从现有中心配置和标准 Nginx 站点读取域名、端口和访问地址，其余参数按提示填写。
+向导询问的是日常运维用户名。已经手动创建过账号，就填写原用户名，向导会复用账号和 SSH 公钥；首次安装可填写要创建的普通用户名。向导会从现有中心配置和标准 Nginx 站点读取域名和端口。管理电脑可以使用动态公网 IP。向导只在需要通过 SSH 安装远端 Agent 时使用目标节点地址。
 
 向导会把已解包的文件与所选归档逐一核对，补齐缺少的文件；核验内部证书、私钥和手动暂存的签发材料；识别 SQLite 中的管理员、待接入凭证和本机 Agent 身份。已经运行且配置生效的服务直接做健康检查。仅在注册、启用变更或退出一次性凭据配置时重启相关服务。
 
-已有受信任的密钥和有效证书可直接使用。需要补签内部证书时输入原 CA 私钥口令；需要用已有面板账号登记 Agent 时输入原管理员口令；新签公网证书需要 Let's Encrypt 邮箱和该 Cloudflare 区域的 DNS 编辑令牌。口令与令牌均隐藏输入。
+已有受信任的密钥和有效证书可直接使用。需要补签内部证书时输入原 CA 私钥口令；需要用已有面板账号登记 Agent 时输入原管理员口令；新签公网证书时填写你能收信的常用邮箱，Certbot 会自动注册账户，并用 HTTP 验证域名。已有 Certbot 证书沿用其续期配置。
+
+按标准模板部署且已限制来源 IP 的站点，重跑后会切换为凭账号访问。Nginx 对登录接口按来源限速，管理 API 继续校验会话。自定义 Nginx 规则需要手动合并。
 
 出现发布内容不同、同名服务指向其他程序、证书与私钥不配对或节点身份不符时，向导会保留现场，并提示具体冲突。核对原发布包或配置后重跑即可。看到“部署完成”后，从管理电脑打开输出的登录地址，确认「中心服务器」在线。更新已安装版本见第 7 节。
 
@@ -40,7 +42,7 @@ bash deploy/install-center.sh "$HOME/asterion-<构建编号>.tar.gz"
 
 ## 2. 配置服务器与个人运维用户
 
-在 DNS 中将面板域名的 A 记录指向中心公网 IPv4。管理电脑和远端 Agent 使用同一 Nginx HTTPS 入口；中心内部监听选择空闲的高端口，不对公网开放。为第 3 节准备 Let's Encrypt 注册邮箱及面板域名所在区域的 DNS 编辑令牌。本文使用 Cloudflare DNS-01 验证，不需要为了签发或续期开启 HTTP 端口。令牌只在中心服务器上按提示输入，不写进项目或 `server.env`。
+在 DNS 中将面板域名的 A 记录指向中心公网 IPv4。管理电脑和远端 Agent 使用同一 Nginx HTTPS 入口；中心内部监听选择空闲的高端口，不对公网开放。为第 3 节准备可收信的联系邮箱。首次签发及自动续期需要公网 TCP 80 可达 Nginx。
 
 手动部署从放有发布包的目录开始，后续命令在 root Bash 中执行。以普通管理员身份登录时，在该目录用 `sudo bash` 进入 root 会话。私钥、证书、数据库和实际部署参数放在服务器私有目录。仓库中的样例保留占位符，本机留存的实际配置可放在 Git 忽略的 `.local/` 目录。
 
@@ -56,8 +58,6 @@ release_id='<构建编号>'
 domain='<面板域名>'
 app_port='<内部监听端口>'
 node_ip='<允许接入的远端节点 IPv4>'
-agent_ip='<该节点访问中心的出口 IPv4>'
-admin_ip='<管理电脑的出口 IPv4>'
 ops='<个人 Linux 运维用户名>'
 ```
 
@@ -66,19 +66,18 @@ ops='<个人 Linux 运维用户名>'
 ```bash
 test "$(id -u)" = 0
 [[ $release_id =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ && $ops =~ ^[a-z][a-z0-9-]{0,23}$ ]]
-python3 - "$domain" "$app_port" "$node_ip" "$agent_ip" "$admin_ip" <<'PY'
+python3 - "$domain" "$app_port" "$node_ip" <<'PY'
 import ipaddress
 import re
 import sys
 
-domain, port, *addresses = sys.argv[1:]
+domain, port, node = sys.argv[1:]
 labels = domain.split(".")
 if len(labels) < 2 or labels[-1].isdigit() or len(domain) > 253 or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels):
     raise SystemExit("请填写有效的面板域名")
 if not port.isascii() or not port.isdecimal() or not 10000 <= int(port) <= 65535:
     raise SystemExit("请选择有效的内部高端口")
-for address in addresses:
-    ipaddress.IPv4Address(address)
+ipaddress.IPv4Address(node)
 PY
 getent ahostsv4 "$domain" | awk '{print $1}' | sort -u
 archive="asterion-$release_id.tar.gz"
@@ -200,7 +199,7 @@ UNIT
 printf '面板用户名：%s-panel\n' "$ops"
 ```
 
-在同一 root Bash 中，保留第 2 节设置的 `domain`，先[准备 DNS 授权](public-tls.md#准备-dns-授权)，再[签发域名证书并启用自动续期](public-tls.md#签发证书并启用自动续期)。确认定时器有下次运行时间、模拟续期成功后回到这里。此时只检查磁盘上的证书；Nginx 实际提供的证书在站点配置完成后验收。
+在同一 root Bash 中，保留第 2 节设置的 `domain`，先[准备 HTTP 验证](public-tls.md#准备-http-验证)，再[签发域名证书并启用自动续期](public-tls.md#签发证书并启用自动续期)。确认定时器有下次运行时间、模拟续期成功后回到这里。此时只检查磁盘上的证书；Nginx 实际提供的证书在站点配置完成后验收。
 
 ```bash
 public_chain="/etc/letsencrypt/live/$domain/fullchain.pem"
@@ -238,6 +237,11 @@ map \$http_upgrade \$asterion_connection_upgrade {
     default upgrade;
     '' close;
 }
+map \$uri \$asterion_login_client {
+    default "";
+    /api/v1/auth/login \$binary_remote_addr;
+}
+limit_req_zone \$asterion_login_client zone=asterion_login:1m rate=6r/m;
 server {
     listen 443 ssl;
     server_name $domain;
@@ -246,10 +250,8 @@ server {
 
     if (\$ssl_server_name != "$domain") { return 444; }
     if (\$host != "$domain") { return 444; }
-    allow 127.0.0.1;
-    allow $admin_ip;
-    allow $agent_ip;
-    deny all;
+    limit_req zone=asterion_login burst=5 nodelay;
+    limit_req_status 429;
 
     location / {
         proxy_pass https://127.0.0.1:$app_port;
@@ -471,7 +473,7 @@ sudo install -m 0600 /etc/systemd/system/asterion-server.service "$backup_dir/"
 readlink -f /opt/asterion/current | sudo tee "$backup_dir/release.txt" > /dev/null
 ```
 
-确认 `quick_check` 返回 `ok`。上述命令不包含公网证书。通过受控的加密备份另存 Nginx 域名站点、内部 CA 签发私钥和口令，以及 `/etc/letsencrypt/`。Certbot 的 `live/` 包含符号链接，只复制它不足以恢复续期；备份须保留链接、属主和权限。该目录还含证书私钥、ACME 账户和 DNS 令牌；若 Nginx 为多个站点共用，只允许有相应权限的管理员保管，不要在已有主机上整目录覆盖。
+确认 `quick_check` 返回 `ok`。上述命令不包含公网证书。通过受控的加密备份另存 Nginx 域名站点、内部 CA 签发私钥和口令，以及 `/etc/letsencrypt/`。Certbot 的 `live/` 包含符号链接，只复制它不足以恢复续期；备份须保留链接、属主和权限。该目录包含证书私钥、ACME 账户以及续期配置使用的凭据；若 Nginx 为多个站点共用，只允许有相应权限的管理员保管，不要在已有主机上整目录覆盖。
 
 Agent 身份由独立主机维护。要保留身份，备份 `agent.env`、私有 CA 设置（如有）和 `identity.json`。身份文件含设备凭证；也可在恢复后重新签发注册凭证。
 
@@ -540,7 +542,7 @@ sudo sqlite3 -batch -bail /var/lib/asterion/asterion.db \
 sudo systemctl start asterion-server.service
 ```
 
-迁移中心主机时，先恢复内部回环证书并按第 3 节验证内部健康检查；公网入口单独验收。在新主机安装 Certbot 及 DNS 插件，恢复受保护的证书和续期配置；没有可用备份时，按[公网证书流程](public-tls.md)为同一面板域名重新签发。确认正式证书存在后再启用引用它的 Nginx 站点。按[证书验收](public-tls.md#验证-nginx-实际提供的证书)核对新主机实际提供的证书，并在新主机的 root Bash 中验证定时器和续期钩子：
+迁移中心主机时，先恢复内部回环证书并按第 3 节验证内部健康检查；公网入口单独验收。在新主机安装 Certbot 和续期配置使用的验证插件，恢复受保护的证书和续期配置；没有可用备份时，按[公网证书流程](public-tls.md)为同一面板域名重新签发。确认正式证书存在后再启用引用它的 Nginx 站点。按[证书验收](public-tls.md#验证-nginx-实际提供的证书)核对新主机实际提供的证书，并在新主机的 root Bash 中验证定时器和续期钩子：
 
 ```bash
 domain='<面板域名>'

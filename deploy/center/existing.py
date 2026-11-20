@@ -106,12 +106,6 @@ def hints(config, sites, sudoers):
             and result.get("domain", domain[1]) == domain[1]
         ):
             result["domain"] = domain[1]
-            allowed = re.findall(r"^\s*allow\s+([\d.]+);", data, re.MULTILINE)
-            if allowed and allowed[0] == "127.0.0.1" and all(map(ipv4, allowed)):
-                if len(allowed) > 1:
-                    result["admin_ip"] = allowed[1]
-                if len(allowed) > 2:
-                    result["agent"] = allowed[2]
     names = [p.name[len("asterion-") :] for p in sudoers.glob("asterion-*")]
     if len(names) == 1:
         result["ops"] = names[0]

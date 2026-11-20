@@ -58,7 +58,8 @@ jobs:
           set result [wait]
           exit [expr {[lindex $result 2] != 0 || [lindex $result 3] != 1}]
           TCL
-      - run: sudo --preserve-env=GITHUB_ACTIONS /usr/bin/python3 -I -B .github/workflows/check_center_install.py
+      - name: 在本机 ACME 服务上验收 HTTP 签发、续期和面板鉴权
+        run: bash .github/workflows/check_center_acme.sh
       - name: 查看安装服务日志
         if: failure()
         run: sudo journalctl --no-pager -o short-precise -u asterion-server.service -u asterion-agent.service -n 100

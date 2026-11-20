@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import platform
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -28,7 +29,7 @@ AGENT_CONFIG = Path("/etc/asterion-agent")
 SETUP = Path("/run/asterion-setup")
 
 
-def runtime_tools():
+def runtime_tools(domain):
     packages = [
         "nginx",
         "openssl",
@@ -39,8 +40,13 @@ def runtime_tools():
         "sudo",
         "openssh-client",
         "certbot",
-        "python3-certbot-dns-cloudflare",
+        "python3-certbot-nginx",
     ]
+    renewal = host.LE / "renewal" / f"{domain}.conf"
+    if renewal.is_file() and re.search(
+        r"(?m)^\s*authenticator\s*=\s*dns-cloudflare\s*$", renewal.read_text()
+    ):
+        packages.append("python3-certbot-dns-cloudflare")
     missing = []
     for package in packages:
         result = subprocess.run(
@@ -198,7 +204,7 @@ def provision(archive):
             ).stdout.strip()
         ):
             raise ValueError(f"回环端口 {c['port']} 被其他服务占用")
-        runtime_tools()
+        runtime_tools(c["domain"])
         host.check_existing_site(c)
         CONFIG.mkdir(mode=0o750, exist_ok=True)
         install_release(c, stage)
@@ -208,9 +214,9 @@ def provision(archive):
             put(STATE, json.dumps(c, ensure_ascii=False) + "\n")
         host.operator(c, work, SETUP)
         tls_marker = CONFIG / "install.tls-ready"
+        services.ensure_running("nginx")
         host.public_tls(c, verified=existing.trusted(tls_marker))
         put(tls_marker, "\n")
-        services.ensure_running("nginx")
         services.activate(c, health, monitor)
 
         def live():

@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from existing import authorized_keys, login_account, trusted
-from inputs import ask, public_key
+from inputs import ask, ipv4, public_key
 
 HERE = Path(__file__).resolve().parent
 CONFIG = Path("/etc/asterion")
@@ -85,10 +85,14 @@ def unit_file(path, expected, *, inspect_only=False):
         or platform.freedesktop_os_release().get("VERSION_ID") != "22.04"
     ):
         return
+    replace_text(path, expected)
+
+
+def replace_text(path, data):
     with tempfile.NamedTemporaryFile(dir=path.parent, mode="w", delete=False) as out:
         new = Path(out.name)
         try:
-            out.write(expected)
+            out.write(data)
             out.flush()
             os.fchmod(out.fileno(), path.stat().st_mode & 0o777)
             os.replace(new, path)
@@ -194,50 +198,28 @@ def check_site(c):
 def public_tls(c, verified=False):
     domain = c["domain"]
     cert = LE / "live" / domain
-    credentials = LE / "asterion" / "cloudflare.ini"
     if not (LE / "renewal" / f"{domain}.conf").is_file():
         verified = False
         email = ask(
-            "Let's Encrypt 注册邮箱",
+            "Let's Encrypt 联系邮箱（填你自己的常用邮箱，Certbot 会自动注册账户）",
             lambda s: re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", s),
         )
-        new_credentials = not credentials.exists()
-        if new_credentials:
-            token = ask(
-                "Cloudflare 区域 DNS 编辑令牌",
-                lambda s: re.fullmatch(r"[A-Za-z0-9_-]+", s),
-                secret=True,
-            )
-            credentials.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            put(credentials, f"dns_cloudflare_api_token = {token}\n")
-        if (
-            credentials.is_symlink()
-            or credentials.stat().st_uid != 0
-            or credentials.stat().st_mode & 0o077
-        ):
-            raise ValueError(f"请检查 DNS 令牌属主和权限 {credentials}")
-        try:
-            run(
-                "certbot",
-                "certonly",
-                "--non-interactive",
-                "--agree-tos",
-                "--email",
-                email,
-                "--cert-name",
-                domain,
-                "-d",
-                domain,
-                "--dns-cloudflare",
-                "--dns-cloudflare-credentials",
-                credentials,
-                "--dns-cloudflare-propagation-seconds",
-                "60",
-            )
-        except subprocess.CalledProcessError:
-            if new_credentials and not (LE / "renewal" / f"{domain}.conf").exists():
-                credentials.unlink()
-            raise
+        print(f"正在验证 {domain}，请确保公网 TCP 80 可达本机 Nginx。", flush=True)
+        run(
+            "certbot",
+            "certonly",
+            "--nginx",
+            "--preferred-challenges",
+            "http-01",
+            "--non-interactive",
+            "--agree-tos",
+            "--email",
+            email,
+            "--cert-name",
+            domain,
+            "-d",
+            domain,
+        )
     run(
         "openssl",
         "verify",
@@ -271,16 +253,26 @@ def public_tls(c, verified=False):
     run("nginx", "-t")
 
 
-def site_config(c):
-    agent_allow = (
-        f"    allow {c['agent']};" if c["agent"] and c["agent"] != c["admin_ip"] else ""
-    )
+LOGIN_ZONE = """map $uri $asterion_login_client {
+    default "";
+    /api/v1/auth/login $binary_remote_addr;
+}
+limit_req_zone $asterion_login_client zone=asterion_login:1m rate=6r/m;"""
+LOGIN_RULES = """    limit_req zone=asterion_login burst=5 nodelay;
+    limit_req_status 429;"""
+
+
+def site_config(c, *, allowed=None):
+    zone, rules = LOGIN_ZONE, LOGIN_RULES
+    if allowed is not None:
+        zone = ""
+        rules = "\n".join([*(f"    allow {ip};" for ip in allowed), "    deny all;"])
     return template(
         "nginx.conf",
         domain=c["domain"],
         port=c["port"],
-        admin_ip=c["admin_ip"],
-        agent_allow=agent_allow,
+        login_zone=zone,
+        access_rules=rules,
     )
 
 
@@ -288,35 +280,55 @@ def check_existing_site(c):
     site = site_path(c)
     if not trusted(site):
         check_site(c)
-        return False
+        return "missing"
 
     def directives(data):
-        result = []
-        for line in data.splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                if line.startswith("allow ") and result[-1:] == [line]:
-                    continue
-                result.append(line)
-        return result
+        return [
+            line.strip()
+            for line in data.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
 
-    if directives(site.read_text()) != directives(site_config(c)):
-        raise ValueError(f"已有 Nginx 站点与目标代理或访问范围不一致，已保留：{site}")
-    return True
+    current = directives(site.read_text())
+    if current == directives(site_config(c)):
+        return "current"
+
+    # 只迁移完整匹配标准模板的站点。逐条核对，保留管理员定制的访问规则。
+    allowed = [
+        line[6:-1]
+        for line in current
+        if line.startswith("allow ") and line.endswith(";")
+    ]
+    if (
+        2 <= len(allowed) <= 3
+        and allowed[0] == "127.0.0.1"
+        and all(map(ipv4, allowed))
+        and current == directives(site_config(c, allowed=allowed))
+    ):
+        return "restricted"
+    raise ValueError(f"已有 Nginx 站点包含自定义配置，已保留：{site}")
 
 
 def enable_site(c, live=None):
     site = site_path(c)
-    new = not check_existing_site(c)
-    if new:
-        put(site, site_config(c), 0o644)
-    elif live and live():
+    state = check_existing_site(c)
+    pending = site.with_suffix(".reload-pending")
+    if state == "current" and not trusted(pending, private=True) and live and live():
         print("复用已生效的 Nginx 站点。")
         return
+    previous = site.read_text() if state == "restricted" else None
+    put(pending, "\n")
+    if previous is not None:
+        replace_text(site, site_config(c))
+    elif state == "missing":
+        put(site, site_config(c), 0o644)
     try:
         run("nginx", "-t")
         run("systemctl", "reload", "nginx")
     except subprocess.CalledProcessError:
-        if new:
+        if previous is not None:
+            replace_text(site, previous)
+        elif state == "missing":
             site.unlink()
         raise
+    pending.unlink()

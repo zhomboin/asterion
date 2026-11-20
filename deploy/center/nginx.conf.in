@@ -2,6 +2,7 @@ map $http_upgrade $asterion_connection_upgrade {
     default upgrade;
     '' close;
 }
+@login_zone@
 server {
     listen 443 ssl;
     server_name @domain@;
@@ -10,10 +11,7 @@ server {
 
     if ($ssl_server_name != "@domain@") { return 444; }
     if ($host != "@domain@") { return 444; }
-    allow 127.0.0.1;
-    allow @admin_ip@;
-@agent_allow@
-    deny all;
+@access_rules@
 
     location / {
         proxy_pass https://127.0.0.1:@port@;
