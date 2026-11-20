@@ -191,7 +191,8 @@ cat > /run/systemd/system/asterion-server.service.d/10-bootstrap.conf <<UNIT
 LoadCredential=admin-password:/run/asterion-first-admin
 RuntimeDirectory=asterion-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 /run/credentials/%n/admin-password /run/asterion-bootstrap/admin-password
+ExecStart=
+ExecStart=/bin/sh -ec '/usr/bin/install -m 0600 /run/credentials/%n/admin-password /run/asterion-bootstrap/admin-password; exec /opt/asterion/current/bin/asterion-server'
 Environment=ASTERION_ADMIN_USERNAME=${ops}-panel
 Environment=ASTERION_ADMIN_PASSWORD_FILE=/run/asterion-bootstrap/admin-password
 UNIT
@@ -315,7 +316,8 @@ cat > /run/systemd/system/asterion-agent.service.d/10-self-enroll.conf <<'UNIT'
 LoadCredential=enrollment:/run/asterion-self-enrollment/token
 RuntimeDirectory=asterion-agent-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment
+ExecStart=
+ExecStart=/bin/sh -ec '/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment; exec /opt/asterion-agent/current/bin/asterion-agent'
 Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment
 UNIT
 systemctl daemon-reload
@@ -414,7 +416,8 @@ sudoedit /etc/systemd/system/asterion-agent.service.d/10-enrollment.conf
 LoadCredential=enrollment:/etc/asterion-agent/enrollment
 RuntimeDirectory=asterion-agent-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment
+ExecStart=
+ExecStart=/bin/sh -ec '/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment; exec /opt/asterion-agent/current/bin/asterion-agent'
 Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment
 ```
 

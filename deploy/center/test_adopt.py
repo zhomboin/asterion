@@ -243,3 +243,25 @@ class AdoptionTests(unittest.TestCase):
         unit.write_text(expected + "User=root\n")
         with self.assertRaises(ValueError):
             host.unit_file(unit, old)
+
+    def test_jammy_adopts_manual_bootstrap_at_main_process_start(self):
+        for name, key, directory in (
+            ("admin.conf", "admin-password", "asterion-bootstrap"),
+            ("enroll.conf", "enrollment", "asterion-agent-bootstrap"),
+        ):
+            expected = host.template(name, ops="operator")
+            copy = f"/usr/bin/install -m 0600 %d/{key} /run/{directory}/{key}"
+            lines = expected.splitlines()
+            start = lines.index("ExecStart=")
+            lines[start : start + 2] = ["ExecStartPre=" + copy]
+            unit = self.root / name
+            host.put(unit, "\n".join(lines) + "\n", 0o644)
+            with patch.object(
+                host.platform,
+                "freedesktop_os_release",
+                return_value={"VERSION_ID": "22.04"},
+            ):
+                host.unit_file(unit, expected, inspect_only=True)
+                self.assertIn("ExecStartPre=", unit.read_text())
+                host.unit_file(unit, expected)
+                self.assertEqual(unit.read_text(), expected)

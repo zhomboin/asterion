@@ -71,7 +71,13 @@ def unit_file(path, expected, *, inspect_only=False):
             put(path, expected, 0o644)
         return
     current = path.read_text()
-    if portable(current) != expected:
+    # 只把标准的凭据复制步骤视为等价；其他自定义启动命令仍然需要人工核对。
+    pre_start = re.sub(
+        r"(?m)^ExecStart=\nExecStart=/bin/sh -ec '(/usr/bin/install -m 0600 [^;\n]+); exec /opt/[^'\n]+'$",
+        r"ExecStartPre=\1",
+        expected,
+    )
+    if portable(current) not in (expected, pre_start):
         raise ValueError(f"服务定义与本次部署不一致，已保留原文件：{path}")
     if (
         inspect_only

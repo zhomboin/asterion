@@ -212,7 +212,7 @@ def deploy(ssh, req, plan, binary, ca, center, arch):
     extra = (f"LoadCredential=ca.pem:{CONF}/ca.pem\nEnvironment=ASTERION_AGENT_CA_FILE=/run/credentials/%n/ca.pem\n" if ca else "")
     unit = req["unit"].replace("[Service]\n", "[Service]\n" + extra).encode()
     drop = (f"[Service]\nLoadCredential=enrollment:{BOOT}/token\nRuntimeDirectory=asterion-agent-bootstrap\n"
-            "RuntimeDirectoryMode=0700\nExecStartPre=/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment\n"
+            "RuntimeDirectoryMode=0700\nExecStart=\nExecStart=/bin/sh -ec '/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment; exec /opt/asterion-agent/current/bin/asterion-agent'\n"
             "Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment\n").encode()
     payloads = {"中心配置":env, "一次性注册凭证":(req.get("token") or "").encode(), "安装服务单元":unit, "首次启动配置":drop,
                 "安装公开 CA":ca, "中心 HTTPS 检查":ca}

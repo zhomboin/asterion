@@ -37,14 +37,6 @@ jobs:
           bash -n deploy/install-center.sh
           bash -n deploy/build-release.sh
           /usr/bin/python3 -B -m unittest discover -s deploy/center -v
-      - name: 检查 systemd 临时凭据的可读性
-        run: |
-          sudo namei -l /run/credentials || true
-          sudo systemd-run --unit=asterion-ci-credential --wait --pipe --collect \
-            -p DynamicUser=yes -p UMask=0077 -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict \
-            -p LoadCredential=probe:/etc/hostname \
-            /bin/sh -c 'id; namei -l "$CREDENTIALS_DIRECTORY/probe"; stat -c "%a %u %g %n" /run/credentials "$CREDENTIALS_DIRECTORY" "$CREDENTIALS_DIRECTORY/probe"; test -r "$CREDENTIALS_DIRECTORY/probe"' || true
-          sudo namei -l /run/credentials
       - run: cargo +stable build --locked --bin asterion-server --bin asterion-agent
       - run: sudo --preserve-env=GITHUB_ACTIONS /usr/bin/python3 -I -B .github/workflows/check_center_install.py
       - name: 查看安装服务日志
