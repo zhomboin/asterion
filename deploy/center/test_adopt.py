@@ -221,3 +221,25 @@ class AdoptionTests(unittest.TestCase):
         (stage / "asterion-agent").write_bytes(b"incompatible")
         with self.assertRaisesRegex(ValueError, "CPU"):
             install.check_binaries(self.root)
+
+    def test_reuse_packaged_unit_across_systemd_versions(self):
+        unit = self.root / "center.service"
+        expected = host.template("agent-local.conf")
+        old = expected.replace("/run/credentials/%n/", "%d/")
+        host.put(unit, old, 0o600)
+        for version in ("24.04", "22.04"):
+            with patch.object(
+                host.platform,
+                "freedesktop_os_release",
+                return_value={"VERSION_ID": version},
+            ):
+                host.unit_file(unit, expected, inspect_only=True)
+                self.assertEqual(unit.read_text(), old)
+                host.unit_file(unit, old)
+                self.assertEqual(
+                    unit.read_text(), old if version == "24.04" else expected
+                )
+                self.assertEqual(unit.stat().st_mode & 0o777, 0o600)
+        unit.write_text(expected + "User=root\n")
+        with self.assertRaises(ValueError):
+            host.unit_file(unit, old)

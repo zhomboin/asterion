@@ -35,6 +35,9 @@ def make_archive(work):
     (release / "deploy").mkdir()
     for name in (host.SERVER, host.AGENT, "self_monitor.py"):
         shutil.copyfile(ROOT / "deploy" / name, release / "deploy" / name)
+    unit = release / "deploy" / host.SERVER
+    unit.write_text(unit.read_text().replace("/run/credentials/%n/", "%d/"))
+    host.put(host.UNITS / host.SERVER, unit.read_text(), 0o644)
     archive = work / "asterion-ci.tar.gz"
     with tarfile.open(archive, "w:gz", compresslevel=1) as bundle:
         for directory in release.iterdir():

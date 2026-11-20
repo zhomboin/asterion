@@ -129,13 +129,12 @@ def install_release(c, stage):
         if not path.is_symlink():
             path.symlink_to(target)
     for unit in (SERVER, AGENT):
-        put(UNITS / unit, (release / "deploy" / unit).read_text(), 0o644)
+        host.unit_file(UNITS / unit, (release / "deploy" / unit).read_text())
     AGENT_CONFIG.mkdir(mode=0o750, exist_ok=True)
     existing.ensure_env(AGENT_CONFIG / "agent.env", agent_config(c), put)
-    put(
+    host.unit_file(
         UNITS / (AGENT + ".d") / "20-local.conf",
         host.template("agent-local.conf"),
-        0o644,
     )
 
 

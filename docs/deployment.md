@@ -191,7 +191,7 @@ cat > /run/systemd/system/asterion-server.service.d/10-bootstrap.conf <<UNIT
 LoadCredential=admin-password:/run/asterion-first-admin
 RuntimeDirectory=asterion-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 %d/admin-password /run/asterion-bootstrap/admin-password
+ExecStartPre=/usr/bin/install -m 0600 /run/credentials/%n/admin-password /run/asterion-bootstrap/admin-password
 Environment=ASTERION_ADMIN_USERNAME=${ops}-panel
 Environment=ASTERION_ADMIN_PASSWORD_FILE=/run/asterion-bootstrap/admin-password
 UNIT
@@ -300,7 +300,7 @@ Wants=asterion-server.service
 After=asterion-server.service
 [Service]
 LoadCredential=ca.pem:/etc/asterion/deploy-ca.crt
-Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
+Environment=ASTERION_AGENT_CA_FILE=/run/credentials/%n/ca.pem
 UNIT
 ```
 
@@ -315,7 +315,7 @@ cat > /run/systemd/system/asterion-agent.service.d/10-self-enroll.conf <<'UNIT'
 LoadCredential=enrollment:/run/asterion-self-enrollment/token
 RuntimeDirectory=asterion-agent-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 %d/enrollment /run/asterion-agent-bootstrap/enrollment
+ExecStartPre=/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment
 Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment
 UNIT
 systemctl daemon-reload
@@ -397,7 +397,7 @@ sudoedit /etc/systemd/system/asterion-agent.service.d/20-private-ca.conf
 ```ini
 [Service]
 LoadCredential=ca.pem:/etc/asterion-agent/ca.pem
-Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
+Environment=ASTERION_AGENT_CA_FILE=/run/credentials/%n/ca.pem
 ```
 
 在「节点 → 接入服务器 → 手动接入」填写名称并选择对应环境。生成凭证后，确认中心地址为目标节点可访问的 HTTPS 域名。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
@@ -414,7 +414,7 @@ sudoedit /etc/systemd/system/asterion-agent.service.d/10-enrollment.conf
 LoadCredential=enrollment:/etc/asterion-agent/enrollment
 RuntimeDirectory=asterion-agent-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 %d/enrollment /run/asterion-agent-bootstrap/enrollment
+ExecStartPre=/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment
 Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment
 ```
 
@@ -698,7 +698,7 @@ sudo install -d -m 0755 /etc/systemd/system/asterion-agent.service.d
 sudoedit /etc/systemd/system/asterion-agent.service.d/40-operations.conf
 ```
 
-在 drop-in 的 `[Service]` 中设置 `LoadCredential=executor.json:/etc/asterion-agent/executor.json` 及 `Environment=ASTERION_EXECUTOR_CONFIG_FILE=%d/executor.json`。执行下方命令后先在面板确认允许列表和可控测试任务，再处理业务服务。
+在 drop-in 的 `[Service]` 中设置 `LoadCredential=executor.json:/etc/asterion-agent/executor.json` 及 `Environment=ASTERION_EXECUTOR_CONFIG_FILE=/run/credentials/%n/executor.json`。执行下方命令后先在面板确认允许列表和可控测试任务，再处理业务服务。
 
 ```bash
 sudo systemctl daemon-reload

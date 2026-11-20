@@ -1,6 +1,7 @@
 """安装中心主机的配置、证书、运维账号与 HTTPS 入口。"""
 
 import os
+import platform
 import re
 import subprocess
 import tempfile
@@ -56,6 +57,37 @@ def template(name, **values):
     for key, value in values.items():
         data = data.replace(f"@{key}@", value)
     return data
+
+
+def unit_file(path, expected, *, inspect_only=False):
+    """识别发布包及手动指南提供的服务文件，在 Jammy 上补齐凭据目录。"""
+
+    def portable(text):
+        return text.replace("%d/", "/run/credentials/%n/")
+
+    expected = portable(expected)
+    if not trusted(path):
+        if not inspect_only:
+            put(path, expected, 0o644)
+        return
+    current = path.read_text()
+    if portable(current) != expected:
+        raise ValueError(f"服务定义与本次部署不一致，已保留原文件：{path}")
+    if (
+        inspect_only
+        or current == expected
+        or platform.freedesktop_os_release().get("VERSION_ID") != "22.04"
+    ):
+        return
+    with tempfile.NamedTemporaryFile(dir=path.parent, mode="w", delete=False) as out:
+        new = Path(out.name)
+        try:
+            out.write(expected)
+            out.flush()
+            os.fchmod(out.fileno(), path.stat().st_mode & 0o777)
+            os.replace(new, path)
+        finally:
+            new.unlink(missing_ok=True)
 
 
 def server_config(c):

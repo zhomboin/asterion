@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from existing import admin_name, local_identity, trusted
-from host import AGENT, CONFIG, RUNTIME, SERVER, UNITS, put, run, template
+from host import AGENT, CONFIG, RUNTIME, SERVER, UNITS, put, run, template, unit_file
 from inputs import password
 
 DATABASE = Path("/var/lib/asterion/asterion.db")
@@ -49,11 +49,7 @@ def check_units(c, stage):
         (AGENT, [ENROLL_CONF, UNITS / (AGENT + ".d/20-local.conf")]),
     ):
         unit_path = UNITS / unit
-        if (
-            trusted(unit_path)
-            and unit_path.read_bytes() != (stage / "deploy" / unit).read_bytes()
-        ):
-            raise ValueError(f"服务定义与发布包不符：{unit_path}")
+        unit_file(unit_path, (stage / "deploy" / unit).read_text(), inspect_only=True)
         fragment = run(
             "systemctl",
             "show",
@@ -92,8 +88,7 @@ def check_units(c, stage):
                         "enroll.conf" if item == ENROLL_CONF else "agent-local.conf"
                     )
                 )
-                if item.read_text() != expected:
-                    raise ValueError(f"已有配置与本次安装不符：{item}")
+                unit_file(item, expected, inspect_only=True)
     trusted(FIRST_ADMIN, private=True)
     trusted(ENROLL, directory=True, private=True)
     trusted(ENROLL / "token", private=True)
@@ -169,11 +164,20 @@ def activate(c, health, monitor):
 
     def temporary(path, content, mode=0o600):
         new = not path.exists()
-        put(path, content, mode)
+        if path in (ADMIN_CONF, ENROLL_CONF):
+            unit_file(path, content)
+        else:
+            put(path, content, mode)
         if new:
             created.append(path)
 
     try:
+        for path, contents in (
+            (ADMIN_CONF, admin_drop),
+            (ENROLL_CONF, template("enroll.conf")),
+        ):
+            if path.exists():
+                unit_file(path, contents)
         if username and ADMIN_CONF.exists() and not FIRST_ADMIN.exists():
             ADMIN_CONF.unlink()
         if not username:
