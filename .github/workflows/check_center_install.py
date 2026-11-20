@@ -29,7 +29,7 @@ def make_archive(work):
     release = work / "release"
     (release / "bin").mkdir(parents=True)
     for name in ("asterion-server", "asterion-agent"):
-        run("strip", "-o", release / "bin" / name, ROOT / "target/debug" / name)
+        run("strip", "-o", release / "bin" / name, ROOT / "target/release" / name)
     (release / "web").mkdir()
     (release / "web/index.html").write_text("Asterion")
     (release / "deploy").mkdir()

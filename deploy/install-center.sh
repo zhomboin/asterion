@@ -4,7 +4,7 @@ set -euo pipefail
 deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
     echo '用法：bash deploy/install-center.sh [可信的 asterion-<构建编号>.tar.gz]'
-    echo '在中心服务器运行。省略归档时先查找当前目录和家目录中的发布包。'
+    echo '以 root 或有 sudo 权限的普通用户运行。省略归档时先查找当前目录和家目录，找不到就从源码构建。'
     exit 0
 fi
 if (( $# > 1 )); then
@@ -36,14 +36,11 @@ else
     done
     case ${#archives[@]} in
         0)
-            if (( EUID == 0 )); then
-                echo '请提供已有发布包的绝对路径，或以普通 sudo 用户从源码构建。' >&2
-                exit 1
-            fi
             cd -- "$deploy_dir/.."
+            echo '未找到发布包，正在从源码构建。'
+            bash "$deploy_dir/build-release.sh"
             release_id=$(git rev-parse --short=12 HEAD)
             archive="$HOME/asterion-$release_id.tar.gz"
-            bash "$deploy_dir/build-release.sh"
             ;;
         1) archive=${archives[0]} ;;
         *)

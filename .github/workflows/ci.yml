@@ -37,7 +37,27 @@ jobs:
           bash -n deploy/install-center.sh
           bash -n deploy/build-release.sh
           /usr/bin/python3 -B -m unittest discover -s deploy/center -v
-      - run: cargo +stable build --locked --bin asterion-server --bin asterion-agent
+      - name: root 从源码构建并进入安装向导
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y expect
+          sudo -H env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$GITHUB_WORKSPACE" expect <<'TCL'
+          set timeout 600
+          spawn bash deploy/install-center.sh
+          expect {
+              "未找到发布包，正在从源码构建。" {}
+              eof { exit 1 }
+              timeout { exit 1 }
+          }
+          expect {
+              "面板域名（已设 DNS A 记录）：" { send "\004" }
+              eof { exit 1 }
+              timeout { exit 1 }
+          }
+          expect eof
+          set result [wait]
+          exit [expr {[lindex $result 2] != 0 || [lindex $result 3] != 1}]
+          TCL
       - run: sudo --preserve-env=GITHUB_ACTIONS /usr/bin/python3 -I -B .github/workflows/check_center_install.py
       - name: 查看安装服务日志
         if: failure()
