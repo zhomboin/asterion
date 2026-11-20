@@ -13,8 +13,8 @@ use tokio::sync::watch;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::{
-    accounts, agent_bus::AgentBus, alerts, assets, auth, http_policy, monitor, nodes, operations,
-    service_monitors, settings, terminal, trends,
+    accounts, alerts, assets, auth, http_policy, monitor, nodes, operations, service_monitors,
+    settings, ssh_bus::SshBus, terminal, trends,
 };
 
 #[derive(Serialize)]
@@ -25,14 +25,14 @@ struct HealthResponse {
 pub fn router(
     pool: SqlitePool,
     web_dir: Option<&Path>,
-    shutdown: watch::Receiver<bool>,
-    bus: Arc<AgentBus>,
+    _shutdown: watch::Receiver<bool>,
+    bus: Arc<SshBus>,
 ) -> Router {
     let terminals = Arc::new(terminal::TerminalHub::new(bus.terminal_enabled()));
     let mut router = Router::new()
         .route("/healthz", get(health))
         .merge(auth::routes())
-        .merge(nodes::routes(shutdown))
+        .merge(nodes::routes())
         .merge(monitor::routes())
         .merge(assets::routes())
         .merge(operations::routes())

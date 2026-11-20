@@ -57,7 +57,7 @@ export function AssetBindings({ asset, onChanged, onExpired }: {
           {asset.bindings.map((binding) => (
             <tr key={binding.id}>
               <th scope="row">{binding.name}<div className="table-secondary technical">{binding.resource_id}</div></th>
-              <td>{managementLabels[binding.kind]}</td><td>Agent 发现</td>
+              <td>{managementLabels[binding.kind]}</td><td>节点发现</td>
               <td><Timestamp value={binding.observed_at} /></td><td><Timestamp value={binding.bound_at} /></td>
               <td><button className="quiet" type="button" disabled={busy} onClick={() => void change(binding.id, true)}>解除关联</button></td>
             </tr>

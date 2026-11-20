@@ -43,14 +43,11 @@ npm --prefix web ci
 npm --prefix web run build
 cargo +stable build --locked --release --workspace
 stage="$work/release"
-for bin in asterion-server asterion-agent asterion-docker-reader asterion-docker-operator asterion-account-operator asterion-terminal-helper; do
-    install -Dm755 "$CARGO_TARGET_DIR/release/$bin" "$stage/bin/$bin"
-done
-install -d "$stage/web" "$stage/deploy/managed" "$stage/deploy/center"
+install -Dm755 "$CARGO_TARGET_DIR/release/asterion-server" "$stage/bin/asterion-server"
+install -d "$stage/web" "$stage/deploy/center"
 cp -a web/dist/. "$stage/web/"
-install -m 0644 deploy/*.service deploy/*.env.example deploy/*.example.json deploy/self_monitor.py deploy/install-center.sh "$stage/deploy/"
-install -m 0644 deploy/managed/{service,common,containers,console,host}.py "$stage/deploy/managed/"
-install -m 0644 deploy/center/{install,host,inputs,existing,pki,services,docker_reader,docker_probe,managed_setup,managed_targets}.py deploy/center/*.in "$stage/deploy/center/"
+install -m 0644 deploy/asterion-server.service deploy/server.env.example deploy/ssh.example.json deploy/install-center.sh "$stage/deploy/"
+install -m 0644 deploy/center/{install,host,inputs,existing,pki,services}.py deploy/center/{nginx,admin,ssh}.conf.in "$stage/deploy/center/"
 tar -C "$stage" -czf "$work/$archive" bin web deploy
 (cd "$work" && sha256sum "$archive" > "$archive.sha256")
 mv -fT -- "$work/$archive" "$HOME/$archive"

@@ -7,18 +7,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from existing import authorized_keys, login_account, trusted
-from inputs import ask, ipv4, public_key
+from existing import trusted
+from inputs import ask, ipv4
 
 HERE = Path(__file__).resolve().parent
 CONFIG = Path("/etc/asterion")
 LE = Path("/etc/letsencrypt")
 UNITS = Path("/etc/systemd/system")
 RUNTIME = Path("/run/systemd/system")
-SUDOERS = Path("/etc/sudoers.d")
 SITES = Path("/etc/nginx/conf.d")
 SERVER = "asterion-server.service"
-AGENT = "asterion-agent.service"
 
 
 def run(*args, **kwargs):
@@ -105,78 +103,8 @@ def server_config(c):
         f"ASTERION_LISTEN_ADDR=127.0.0.1:{c['port']}",
         "ASTERION_DATABASE_URL=sqlite:///var/lib/asterion/asterion.db",
         "ASTERION_WEB_DIR=/opt/asterion/current/web",
-        "ASTERION_TERMINAL_ENABLED=0",
     ]
-    if c["node"]:
-        lines.extend(
-            [
-                "ASTERION_SSH_DEPLOY_AGENT=/opt/asterion/current/bin/asterion-agent",
-                f"ASTERION_SSH_DEPLOY_CENTER_URL=https://{c['domain']}",
-                f"ASTERION_SSH_DEPLOY_NETWORKS={c['node']}/32",
-            ]
-        )
     return "\n".join(lines) + "\n"
-
-
-def operator(c, work, setup=None):
-    name = c["ops"]
-    account = login_account(name)
-    if account is None:
-        if os.path.lexists(Path("/home") / name):
-            raise ValueError(f"已有同名家目录但找不到账号：{name}")
-        run(
-            "adduser",
-            "--disabled-password",
-            "--gecos",
-            "Asterion center operator",
-            name,
-        )
-        account = login_account(name)
-    else:
-        print(f"复用运维账号 {name}。")
-    if not authorized_keys(account):
-        key = c.get("key")
-        if (
-            not key
-            and setup
-            and trusted(setup, directory=True, private=True)
-            and trusted(setup / "ops-key.pub")
-        ):
-            key = (setup / "ops-key.pub").read_text().strip()
-            if len(key.splitlines()) != 1 or not re.fullmatch(
-                r"(?:ssh-|ecdsa-|sk-)[\w@.-]+ [A-Za-z0-9+/=]+(?: [^\r\n]*)?", key
-            ):
-                raise ValueError("手动暂存的运维公钥格式无效")
-            run("ssh-keygen", "-lf", "-", input=key + "\n")
-        key = key or public_key()
-        ssh = Path(account.pw_dir) / ".ssh"
-        as_user = ["runuser", "-u", name, "--"]
-        run(*as_user, "mkdir", "-p", "-m", "0700", ssh)
-        run(
-            *as_user,
-            "sh",
-            "-c",
-            'set -e; umask 077; test ! -L "$1"; if test -e "$1"; then test -f "$1"; test ! -s "$1"; else set -C; fi; cat > "$1"',
-            "sh",
-            ssh / "authorized_keys",
-            input=key + "\n",
-        )
-    rule = (
-        f"{name} ALL=(root) NOPASSWD: /usr/bin/systemctl restart {SERVER}, "
-        f"/usr/bin/journalctl --no-pager -u {SERVER} -n 100\n"
-    )
-    put(work / "sudoers", rule, 0o440)
-    run("visudo", "-cf", work / "sudoers")
-    destination = SUDOERS / f"asterion-{name}"
-    if trusted(destination) and destination.read_text() != rule:
-        run("visudo", "-cf", destination)
-        for command in (
-            ["/usr/bin/systemctl", "restart", SERVER],
-            ["/usr/bin/journalctl", "--no-pager", "-u", SERVER, "-n", "100"],
-        ):
-            run("sudo", "-n", "-l", "-U", name, *command, stdout=subprocess.DEVNULL)
-        return
-    put(destination, rule, 0o440)
 
 
 def site_path(c):

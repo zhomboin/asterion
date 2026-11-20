@@ -6,7 +6,7 @@
 
 ## 准备 HTTP 验证
 
-域名的 A 记录应指向中心公网 IPv4。如果发布了 AAAA 记录，该 IPv6 地址也应能提供验证路径。确保公网 TCP 80 的 `/.well-known/acme-challenge/` 请求能到达本机 Nginx，包括经过安全组、防火墙或 CDN 的情况。TCP 443 提供面板和 Agent 的 HTTPS 连接。自动续期同样需要验证路径可达。[Let’s Encrypt 的 HTTP-01 验证](https://letsencrypt.org/zh-cn/docs/challenge-types/#http-01-挑战)
+域名的 A 记录应指向中心公网 IPv4。如果发布了 AAAA 记录，该 IPv6 地址也应能提供验证路径。确保公网 TCP 80 的 `/.well-known/acme-challenge/` 请求能到达本机 Nginx，包括经过安全组、防火墙或 CDN 的情况。TCP 443 提供面板的 HTTPS 连接。自动续期同样需要验证路径可达。[Let’s Encrypt 的 HTTP-01 验证](https://letsencrypt.org/zh-cn/docs/challenge-types/#http-01-挑战)
 
 ```bash
 set -euo pipefail
@@ -43,7 +43,7 @@ systemctl list-timers --all certbot.timer
 
 ## 验证 Nginx 实际提供的证书
 
-首次部署请先回到[服务器部署](deployment.md#3-安装中心配置-nginx-并开启自监控)，启用域名站点后再进行本项验收。迁移主机时还需按[备份和恢复](deployment.md#6-备份和恢复)在新主机验证自动续期。
+首次部署请先回到[服务器部署](deployment.md#一键初始化中心)，启用域名站点后再进行本项验收。迁移主机时还需按[备份和恢复](deployment.md#备份和恢复)在新主机验证自动续期。
 
 Nginx 的 `ssl_certificate` 使用 `/etc/letsencrypt/live/<面板域名>/fullchain.pem`，`ssl_certificate_key` 使用同目录的 `privkey.pem`。保存站点配置后执行以下命令，从回环地址带上域名校验源站证书及实际指纹。
 

@@ -22,7 +22,8 @@ export interface Node extends NodeDraft {
   os: string | null;
   arch: string | null;
   wsl_distro: string | null;
-  agent_version: string | null;
+  ssh_profile: string | null;
+  ssh_error: string | null;
   last_seen_at: number | null;
   status: 'pending' | 'online' | 'offline';
   metrics?: NodeMetrics;
@@ -34,12 +35,6 @@ export interface NodePage {
   nodes: Node[];
   has_more: boolean;
   status_counts?: NodeStatusCounts;
-}
-
-export interface Enrollment {
-  node_id: string;
-  token: string;
-  expires_at: number;
 }
 
 export class ApiError extends Error {

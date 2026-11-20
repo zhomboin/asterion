@@ -1,23 +1,17 @@
 """手动安装各阶段与再次运行的隔离回归。"""
 
-import hashlib
-import json
 import secrets
 import shutil
-import sqlite3
 import subprocess
 import tempfile
-import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import patch
 
 import existing
 import host
 import install
 import pki
-import services
 
 
 class AdoptionTests(unittest.TestCase):
@@ -36,28 +30,6 @@ class AdoptionTests(unittest.TestCase):
             "node": "192.0.2.2",
         }
 
-    def test_manual_account_needs_neither_key_nor_adduser(self):
-        account = SimpleNamespace(
-            pw_name=self.c["ops"], pw_dir=str(self.root), pw_gecos=""
-        )
-        with (
-            patch.object(host, "SUDOERS", self.config),
-            patch.object(host, "login_account", return_value=account),
-            patch.object(host, "authorized_keys", return_value=True),
-            patch.object(host, "public_key") as key,
-            patch.object(host, "run") as run,
-        ):
-            host.operator(self.c, self.root)
-            rule = next(self.config.iterdir())
-            previous = rule.stat()
-            host.operator(self.c, self.root)
-            self.assertEqual(rule.stat().st_ino, previous.st_ino)
-            self.assertEqual(rule.stat().st_mode & 0o777, 0o440)
-            key.assert_not_called()
-            self.assertEqual(
-                run.call_args_list, [call("visudo", "-cf", self.root / "sudoers")] * 2
-            )
-
     def test_env_preserved_and_standard_site_migrated(self):
         env = self.config / "server.env"
         lines = host.server_config(self.c).splitlines()
@@ -71,8 +43,8 @@ class AdoptionTests(unittest.TestCase):
                 self.c, allowed=["127.0.0.1", "192.0.2.9", "192.0.2.9"]
             )
             host.put(site, text, 0o644)
-            hints = existing.hints(self.config, self.root, self.root)
-            for key in ("domain", "port", "node"):
+            hints = existing.hints(self.config, self.root)
+            for key in ("domain", "port"):
                 self.assertEqual(hints[key], self.c[key])
             with (
                 patch.object(
@@ -145,96 +117,20 @@ class AdoptionTests(unittest.TestCase):
             (self.config / "pki/ca.key").read_bytes(), original["pki/ca.key"]
         )
 
-    def test_manual_credentials_from_database_and_healthy_services(self):
-        db = self.root / "center.db"
-        identity = self.root / "identity"
-        token = secrets.token_hex(32)
-        node = secrets.token_hex(16)
-        with sqlite3.connect(db) as conn:
-            conn.executescript("""
-                CREATE TABLE _sqlx_migrations (version INTEGER);
-                CREATE TABLE panel_admin (id INTEGER, username TEXT);
-                CREATE TABLE nodes (id TEXT, name TEXT, last_seen_at INTEGER);
-                CREATE TABLE node_enrollment_tokens (node_id TEXT, fingerprint BLOB, expires_at INTEGER, consumed_at INTEGER, revoked_at INTEGER);
-                CREATE TABLE agent_credentials (node_id TEXT, fingerprint BLOB, revoked_at INTEGER);
-            """)
-            conn.execute("INSERT INTO panel_admin VALUES(1,'panel-test')")
-            conn.execute("INSERT INTO nodes VALUES(?, '中心服务器', NULL)", (node,))
-            conn.execute(
-                "INSERT INTO node_enrollment_tokens VALUES(?,?,?,NULL,NULL)",
-                (node, hashlib.sha256(token.encode()).digest(), time.time() + 60),
-            )
-        boot = self.root / "boot"
-        boot.mkdir()
-        host.put(boot / "token", token)
-        with patch.multiple(
-            services,
-            CONFIG=self.config,
-            DATABASE=db,
-            IDENTITY=identity,
-            ENROLL=boot,
-            ADMIN_CONF=self.root / "admin.conf",
-            ENROLL_CONF=self.root / "enroll.conf",
-            FIRST_ADMIN=self.root / "password",
-        ):
-            self.assertEqual(services.enrollment_state(), "token")
-            self.assertEqual((self.config / "self-node").read_text().strip(), node)
-            with sqlite3.connect(db) as conn:
-                conn.execute("UPDATE node_enrollment_tokens SET expires_at=0")
-            self.assertEqual(services.enrollment_state(), "register")
-            bearer = secrets.token_hex(32)
-            host.put(
-                identity,
-                json.dumps(
-                    {
-                        "node_id": node,
-                        "endpoint": "wss://127.0.0.1:18080/api/v1/agent/connect",
-                        "bearer": bearer,
-                    }
-                ),
-            )
-            with sqlite3.connect(db) as conn:
-                conn.execute(
-                    "INSERT INTO agent_credentials VALUES(?,?,NULL)",
-                    (node, hashlib.sha256(bearer.encode()).digest()),
-                )
-            self.assertEqual(existing.local_identity(identity, "18080"), node)
-            with (
-                patch.object(services, "ensure_running") as ensure,
-                patch.object(services, "active", return_value=True),
-                patch.object(services, "run") as commands,
-                patch.object(services, "password") as password,
-            ):
-                monitor = Mock()
-                services.activate(self.c, Mock(), monitor)
-                self.assertEqual(
-                    ensure.call_args_list,
-                    [call(services.SERVER), call(services.AGENT, restart=False)],
-                )
-                monitor.assert_called_once_with("wait")
-                self.assertFalse(
-                    any(
-                        "restart" in op.args or "stop" in op.args
-                        for op in commands.call_args_list
-                    )
-                )
-                password.assert_not_called()
-            self.assertEqual(existing.admin_name(db), "panel-test")
-
     def test_native_loader_accepts_distribution_binary(self):
         stage = self.root / "bin"
         stage.mkdir()
-        for name in ("asterion-server", "asterion-agent"):
+        for name in ("asterion-server",):
             shutil.copyfile("/bin/true", stage / name)
             (stage / name).chmod(0o755)
         install.check_binaries(self.root)
-        (stage / "asterion-agent").write_bytes(b"incompatible")
+        (stage / "asterion-server").write_bytes(b"incompatible")
         with self.assertRaisesRegex(ValueError, "CPU"):
             install.check_binaries(self.root)
 
     def test_reuse_packaged_unit_across_systemd_versions(self):
         unit = self.root / "center.service"
-        expected = host.template("agent-local.conf")
+        expected = host.template("admin.conf", ops="panel")
         old = expected.replace("/run/credentials/%n/", "%d/")
         host.put(unit, old, 0o600)
         for version in ("24.04", "22.04"):
@@ -257,7 +153,6 @@ class AdoptionTests(unittest.TestCase):
     def test_jammy_adopts_manual_bootstrap_at_main_process_start(self):
         for name, key, directory in (
             ("admin.conf", "admin-password", "asterion-bootstrap"),
-            ("enroll.conf", "enrollment", "asterion-agent-bootstrap"),
         ):
             expected = host.template(name, ops="operator")
             copy = f"/usr/bin/install -m 0600 %d/{key} /run/{directory}/{key}"

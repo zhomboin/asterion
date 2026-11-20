@@ -14,20 +14,16 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import docker_reader
 import existing
 import host
-import managed_setup
 import pki
 import services
-from host import AGENT, CONFIG, SERVER, UNITS, put, run
+from host import CONFIG, SERVER, UNITS, put, run
 from inputs import release_info, settings, unpack
 
 STATE = CONFIG / "install.json"
 DONE = CONFIG / "install.complete"
 BASE = Path("/opt/asterion")
-AGENT_BASE = Path("/opt/asterion-agent")
-AGENT_CONFIG = Path("/etc/asterion-agent")
 SETUP = Path("/run/asterion-setup")
 
 
@@ -37,9 +33,7 @@ def runtime_tools(domain):
         "openssl",
         "ca-certificates",
         "curl",
-        "python3-paramiko",
         "sqlite3",
-        "sudo",
         "openssh-client",
         "certbot",
         "python3-certbot-nginx",
@@ -70,7 +64,7 @@ def check_binaries(stage):
         "x86_64": (62, "/lib64/ld-linux-x86-64.so.2"),
         "aarch64": (183, "/lib/ld-linux-aarch64.so.1"),
     }
-    for name in ("asterion-server", "asterion-agent"):
+    for name in ("asterion-server",):
         binary = stage / "bin" / name
         with binary.open("rb") as stream:
             header = stream.read(20)
@@ -92,26 +86,18 @@ def check_binaries(stage):
 
 
 def check_layout(c, stage):
-    for path in (BASE, BASE / "releases", AGENT_BASE, CONFIG, AGENT_CONFIG):
+    for path in (BASE, BASE / "releases", CONFIG):
         existing.trusted(path, directory=True)
     release = BASE / "releases" / c["revision"]
     existing.trusted(release, directory=True)
     existing.check_link(BASE / "current", release)
-    existing.check_link(AGENT_BASE / "current", BASE / "current")
     services.check_units(c, stage)
-    for path, expected in (
-        (CONFIG / "server.env", host.server_config(c)),
-        (AGENT_CONFIG / "agent.env", agent_config(c)),
-    ):
+    for path, expected in ((CONFIG / "server.env", host.server_config(c)),):
         values = existing.env_values(path)
         for line in expected.splitlines():
             key, value = line.split("=", 1)
             if values.get(key, value) != value:
                 raise ValueError(f"{path} 中 {key} 与目标配置不一致")
-
-
-def agent_config(c):
-    return f"ASTERION_SERVER_URL=https://127.0.0.1:{c['port']}\nASTERION_AGENT_STATE_FILE=/var/lib/asterion-agent/identity.json\n"
 
 
 def install_release(c, stage):
@@ -128,22 +114,11 @@ def install_release(c, stage):
             shutil.copytree(stage, dest)
             put(dest / ".sha256", c["sha256"] + "\n")
             dest.rename(release)
-    AGENT_BASE.mkdir(mode=0o755, exist_ok=True)
-    for path, target in (
-        (BASE / "current", release),
-        (AGENT_BASE / "current", BASE / "current"),
-    ):
-        existing.check_link(path, target)
-        if not path.is_symlink():
-            path.symlink_to(target)
-    for unit in (SERVER, AGENT):
-        host.unit_file(UNITS / unit, (release / "deploy" / unit).read_text())
-    AGENT_CONFIG.mkdir(mode=0o750, exist_ok=True)
-    existing.ensure_env(AGENT_CONFIG / "agent.env", agent_config(c), put)
-    host.unit_file(
-        UNITS / (AGENT + ".d") / "20-local.conf",
-        host.template("agent-local.conf"),
-    )
+    link = BASE / "current"
+    existing.check_link(link, release)
+    if not link.is_symlink():
+        link.symlink_to(release)
+    host.unit_file(UNITS / SERVER, (release / "deploy" / SERVER).read_text())
 
 
 def health(c, public=False, retry=True):
@@ -175,10 +150,6 @@ def health(c, public=False, retry=True):
         raise ValueError("中心健康检查未通过")
 
 
-def monitor(*args):
-    run("/usr/bin/python3", "-I", "-B", host.HERE.parent / "self_monitor.py", *args)
-
-
 def provision(archive):
     revision, digest = release_info(archive)
     existing.trusted(CONFIG, directory=True)
@@ -195,10 +166,9 @@ def provision(archive):
             if (revision, digest) != (c["revision"], c["sha256"]):
                 raise ValueError("发布包与安装记录不同；更新已安装版本请使用升级流程")
         else:
-            c = settings(existing.hints(CONFIG, host.SITES, host.SUDOERS))
+            c = settings(existing.hints(CONFIG, host.SITES))
             c.update(revision=revision, sha256=digest)
         check_layout(c, stage)
-        existing.login_account(c["ops"])
         if (
             not services.active(SERVER)
             and run(
@@ -214,12 +184,11 @@ def provision(archive):
         existing.ensure_env(CONFIG / "server.env", host.server_config(c), put)
         if not recorded:
             put(STATE, json.dumps(c, ensure_ascii=False) + "\n")
-        host.operator(c, work, SETUP)
         tls_marker = CONFIG / "install.tls-ready"
         services.ensure_running("nginx")
         host.public_tls(c, verified=existing.trusted(tls_marker))
         put(tls_marker, "\n")
-        services.activate(c, health, monitor)
+        services.activate(c, health)
 
         def live():
             try:
@@ -230,14 +199,12 @@ def provision(archive):
 
         host.enable_site(c, live)
         health(c, public=True)
-        for unit in (SERVER, AGENT, "nginx", "certbot.timer"):
+        for unit in (SERVER, "nginx", "certbot.timer"):
             run("systemctl", "is-active", unit)
         put(DONE, "\n")
         print(
             f"部署完成。面板 https://{c['domain']}/login，用户名 {existing.admin_name(services.DATABASE)}。"
         )
-        docker_reader.configure(BASE, AGENT_BASE, AGENT_CONFIG)
-        managed_setup.configure(BASE, AGENT_BASE, AGENT_CONFIG)
 
 
 def main():
@@ -254,12 +221,7 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             sys.exit("另一个中心安装进程正在运行。")
-        if sys.argv[1] == "--docker-reader":
-            docker_reader.configure(BASE, AGENT_BASE, AGENT_CONFIG, selected=True)
-        elif sys.argv[1] == "--managed":
-            managed_setup.configure(BASE, AGENT_BASE, AGENT_CONFIG)
-        else:
-            provision(Path(sys.argv[1]))
+        provision(Path(sys.argv[1]))
 
 
 if __name__ == "__main__":

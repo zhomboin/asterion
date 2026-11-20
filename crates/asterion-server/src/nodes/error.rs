@@ -17,13 +17,6 @@ struct ErrorBody {
 }
 
 impl ApiError {
-    pub(super) fn deployment(status: StatusCode, message: &'static str) -> Self {
-        Self {
-            status,
-            code: "ssh_deployment",
-            message,
-        }
-    }
     pub const INVALID_INPUT: Self = Self {
         status: StatusCode::BAD_REQUEST,
         code: "invalid_node_input",
@@ -38,16 +31,6 @@ impl ApiError {
         status: StatusCode::CONFLICT,
         code: "node_in_use",
         message: "节点仍有关联的服务资产",
-    };
-    pub const UNAUTHORIZED: Self = Self {
-        status: StatusCode::UNAUTHORIZED,
-        code: "invalid_agent_credentials",
-        message: "Agent 凭证无效或已失效",
-    };
-    pub const BUSY: Self = Self {
-        status: StatusCode::SERVICE_UNAVAILABLE,
-        code: "agent_connection_limit",
-        message: "中心连接繁忙，请稍后重试",
     };
     pub const INTERNAL: Self = Self {
         status: StatusCode::INTERNAL_SERVER_ERROR,

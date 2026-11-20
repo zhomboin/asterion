@@ -111,9 +111,9 @@ function NodeRow({ node, manage }: { node: Node; manage: boolean }) {
       </div>
       <dl className="node-meta">
         <div><dt>状态</dt><dd><NodeStatus node={node} /></dd></div>
-        <div><dt>最近心跳</dt><dd><Timestamp value={node.last_seen_at} /></dd></div>
+        <div><dt>最近连接</dt><dd><Timestamp value={node.last_seen_at} /></dd></div>
         <div><dt>系统</dt><dd>{[node.os, node.arch].filter(Boolean).join(' · ') || '—'}</dd></div>
-        <div><dt>Agent 版本</dt><dd>{node.agent_version ?? '—'}</dd></div>
+        <div><dt>SSH 连接</dt><dd>{node.ssh_profile ?? '—'}</dd></div>
         {!manage && (
           <>
             <div><dt>CPU</dt><dd>{fraction(node.metrics?.cpu_percent ?? null)}</dd></div>
@@ -124,7 +124,6 @@ function NodeRow({ node, manage }: { node: Node; manage: boolean }) {
         )}
       </dl>
       {manage && <div className="row-actions">
-        <a className="text-link" href={'/nodes/' + node.id + '/deploy'} aria-label={'Agent 接入 ' + node.name}>Agent 接入</a>
         <a className="text-link" href={'/nodes/' + node.id + '/manage'} aria-label={'管理 ' + node.name}>管理</a>
       </div>}
     </li>

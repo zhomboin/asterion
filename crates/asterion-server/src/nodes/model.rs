@@ -1,4 +1,4 @@
-use asterion_protocol::{HEARTBEAT_TIMEOUT_SECS, NodeKind, is_node_id};
+use asterion_protocol::{NodeKind, is_node_id};
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{FromRow, Sqlite, SqlitePool, Transaction};
 
@@ -8,10 +8,8 @@ use crate::model::Node;
 const NODE_QUERY: &str = "SELECT n.*,
     (SELECT name FROM hosts WHERE id = n.host_id) AS host_name,
     CASE
-    WHEN n.last_seen_at IS NULL THEN 'pending'
-    WHEN n.last_seen_at > unixepoch() - ? AND EXISTS (
-        SELECT 1 FROM agent_credentials a WHERE a.node_id = n.id AND a.revoked_at IS NULL
-    ) THEN 'online'
+    WHEN n.ssh_online_until IS NULL THEN 'pending'
+    WHEN n.ssh_online_until > unixepoch() THEN 'online'
     ELSE 'offline'
     END AS status FROM nodes n";
 
@@ -19,6 +17,7 @@ const NODE_QUERY: &str = "SELECT n.*,
 #[serde(deny_unknown_fields)]
 pub(super) struct NodeInput {
     pub name: String,
+    pub ssh_profile: String,
     pub host_name: Option<String>,
     pub kind: NodeKind,
     #[serde(default)]
@@ -31,6 +30,7 @@ impl NodeInput {
     pub fn validate(self) -> Result<Self, ApiError> {
         Ok(Self {
             name: validate_name(self.name)?,
+            ssh_profile: profile(self.ssh_profile)?,
             host_name: self.host_name.map(validate_name).transpose()?,
             kind: self.kind,
             tags: validate_tags(self.tags)?,
@@ -43,6 +43,7 @@ impl NodeInput {
 #[serde(deny_unknown_fields)]
 pub(super) struct NodePatch {
     pub name: Option<String>,
+    pub ssh_profile: Option<String>,
     #[serde(default, deserialize_with = "nullable_name")]
     pub host_name: Option<Option<String>>,
     pub kind: Option<NodeKind>,
@@ -52,7 +53,8 @@ pub(super) struct NodePatch {
 
 impl NodePatch {
     pub fn validate(self) -> Result<Self, ApiError> {
-        if self.name.is_none()
+        if self.ssh_profile.is_none()
+            && self.name.is_none()
             && self.host_name.is_none()
             && self.kind.is_none()
             && self.tags.is_none()
@@ -62,6 +64,7 @@ impl NodePatch {
         }
 
         Ok(Self {
+            ssh_profile: self.ssh_profile.map(profile).transpose()?,
             name: self.name.map(validate_name).transpose()?,
             host_name: self
                 .host_name
@@ -78,6 +81,14 @@ fn nullable_name<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Option<String>>, D::Error> {
     Option::deserialize(deserializer).map(Some)
+}
+
+fn profile(value: String) -> Result<String, ApiError> {
+    if crate::ssh::valid_profile(&value) {
+        Ok(value)
+    } else {
+        Err(ApiError::INVALID_INPUT)
+    }
 }
 
 fn validate_name(value: String) -> Result<String, ApiError> {
@@ -141,6 +152,8 @@ pub(super) struct NodeView {
     #[serde(flatten)]
     node: Node,
     host_name: Option<String>,
+    ssh_profile: Option<String>,
+    ssh_error: Option<String>,
     status: NodeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     metrics: Option<NodeMetrics>,
@@ -181,7 +194,8 @@ struct NodeRow {
     os: Option<String>,
     arch: Option<String>,
     wsl_distro: Option<String>,
-    agent_version: Option<String>,
+    ssh_profile: Option<String>,
+    ssh_error: Option<String>,
     last_seen_at: Option<i64>,
     created_at: i64,
     updated_at: i64,
@@ -210,12 +224,13 @@ impl TryFrom<NodeRow> for NodeView {
                 wsl_distro: row.wsl_distro,
                 tags,
                 notes: row.notes,
-                agent_version: row.agent_version,
                 last_seen_at: row.last_seen_at,
                 created_at: row.created_at,
                 updated_at: row.updated_at,
             },
             host_name: row.host_name,
+            ssh_profile: row.ssh_profile,
+            ssh_error: row.ssh_error,
             status: row.status,
             metrics: None,
         })
@@ -226,7 +241,6 @@ pub(super) async fn get(pool: &SqlitePool, id: &str) -> Result<NodeView, ApiErro
     check_id(id)?;
     let sql = format!("{NODE_QUERY} WHERE n.id = ?");
     let node = sqlx::query_as::<_, NodeRow>(&sql)
-        .bind(HEARTBEAT_TIMEOUT_SECS as i64)
         .bind(id)
         .fetch_optional(pool)
         .await?
@@ -279,14 +293,14 @@ pub(super) async fn list(
     let sql = format!(
         "WITH node_status AS ({NODE_QUERY}), node_page AS (
              SELECT * FROM node_status AS n
-             WHERE (?2 IS NULL OR instr(lower(n.name), lower(?2)) > 0 OR instr(n.id, lower(?2)) > 0)
-               AND (?3 IS NULL OR EXISTS (SELECT 1 FROM json_each(n.tags) AS t WHERE t.value = ?3))
-               AND (?4 IS NULL OR n.status = ?4)
-             ORDER BY n.created_at, n.id LIMIT ?5 OFFSET ?6
+             WHERE (?1 IS NULL OR instr(lower(n.name), lower(?1)) > 0 OR instr(n.id, lower(?1)) > 0)
+               AND (?2 IS NULL OR EXISTS (SELECT 1 FROM json_each(n.tags) AS t WHERE t.value = ?2))
+               AND (?3 IS NULL OR n.status = ?3)
+             ORDER BY n.created_at, n.id LIMIT ?4 OFFSET ?5
          )
          SELECT p.*, m.observed_at AS metric_observed_at, m.sample AS metric_sample
          FROM node_page AS p
-         LEFT JOIN metric_samples AS m ON ?7 AND m.node_id = p.id AND m.observed_at = (
+         LEFT JOIN metric_samples AS m ON ?6 AND m.node_id = p.id AND m.observed_at = (
              SELECT max(observed_at) FROM metric_samples
              WHERE node_id = p.id AND observed_at <= unixepoch()
          )
@@ -299,7 +313,6 @@ pub(super) async fn list(
     });
     let mut tx = pool.begin().await?;
     let mut rows = sqlx::query_as::<_, NodeListRow>(&sql)
-        .bind(HEARTBEAT_TIMEOUT_SECS as i64)
         .bind(filters.q.as_deref())
         .bind(filters.tag.as_deref())
         .bind(status)
@@ -315,12 +328,7 @@ pub(super) async fn list(
                     count(*) FILTER (WHERE status = 'offline') AS offline
              FROM ({NODE_QUERY})"
         );
-        Some(
-            sqlx::query_as(&counts_sql)
-                .bind(HEARTBEAT_TIMEOUT_SECS as i64)
-                .fetch_one(&mut *tx)
-                .await?,
-        )
+        Some(sqlx::query_as(&counts_sql).fetch_one(&mut *tx).await?)
     } else {
         None
     };

@@ -24,10 +24,10 @@ export type ServiceMonitorChange = ServiceState & {
 };
 
 export const monitorReason: Record<ServiceMonitorReason, string> = {
-  offline: 'Agent 离线',
-  busy: 'Agent 正忙',
+  offline: 'SSH 离线',
+  busy: 'SSH 正忙',
   timeout: '检查超时',
-  unsupported: 'Agent 不支持服务检查',
+  unsupported: 'SSH 不支持服务检查',
   not_found: '未找到服务',
   permission_denied: '没有读取权限',
   unavailable: 'systemd 不可用',

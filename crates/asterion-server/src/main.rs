@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use asterion_server::{
-    agent_bus::AgentBus, alerts, app, auth, config::Config, database, monitor, operations,
-    service_monitors, trends,
+    alerts, app, auth, config::Config, database, monitor, operations, service_monitors,
+    ssh_bus::SshBus, trends,
 };
 use axum_server::Handle;
 use axum_server::tls_rustls::{RustlsConfig, from_tcp_rustls};
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
         .await
         .context("无法清理过期服务监控记录")?;
     let bus = Arc::new(
-        AgentBus::new(config.sample_interval_secs)
+        SshBus::new(config.sample_interval_secs)
             .with_terminal_enabled(config.terminal_enabled)
             .with_retention_days(
                 (config.retention_seconds / 86_400) as u64,
@@ -61,6 +61,11 @@ async fn main() -> Result<()> {
     let maintenance = maintain(pool.clone(), &config);
     let service_checks = monitor_services(pool.clone(), Arc::clone(&bus));
     let (stopping, shutdown) = watch::channel(false);
+    let ssh_workers = tokio::spawn(asterion_server::ssh::serve(
+        pool.clone(),
+        Arc::clone(&bus),
+        shutdown.clone(),
+    ));
     let app = app::router(pool.clone(), config.web_dir.as_deref(), shutdown, bus);
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
@@ -81,6 +86,8 @@ async fn main() -> Result<()> {
     service_checks.abort();
     let _ = maintenance.await;
     let _ = service_checks.await;
+    ssh_workers.abort();
+    let _ = ssh_workers.await;
     pool.close().await;
     drop(database_guard);
     result
@@ -150,7 +157,7 @@ fn maintain(pool: sqlx::SqlitePool, config: &Config) -> tokio::task::JoinHandle<
     })
 }
 
-fn monitor_services(pool: sqlx::SqlitePool, bus: Arc<AgentBus>) -> tokio::task::JoinHandle<()> {
+fn monitor_services(pool: sqlx::SqlitePool, bus: Arc<SshBus>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(5));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

@@ -3,9 +3,9 @@ use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use sqlx::{Sqlite, SqlitePool, Transaction};
+use sqlx::SqlitePool;
 
-use super::credentials::{self, IssuedEnrollment, random_hex};
+use super::credentials::random_hex;
 use super::error::ApiError;
 use super::hosts;
 use super::model::{self, NodeFilters, NodeInput, NodeList, NodePatch, NodeStatus, NodeView};
@@ -66,18 +66,9 @@ pub(super) async fn create(
     session: AdminSession,
     State(pool): State<SqlitePool>,
     body: Result<Json<NodeInput>, JsonRejection>,
-) -> Result<(StatusCode, Json<IssuedEnrollment>), ApiError> {
+) -> Result<(StatusCode, Json<NodeView>), ApiError> {
     let Json(input) = body.map_err(ApiError::invalid_json)?;
-    let enrollment = register(&pool, &session.username, input, random_hex::<16>()?).await?;
-    Ok((StatusCode::CREATED, Json(enrollment)))
-}
-
-pub(super) async fn register(
-    pool: &SqlitePool,
-    actor: &str,
-    input: NodeInput,
-    id: String,
-) -> Result<IssuedEnrollment, ApiError> {
+    let id = random_hex::<16>()?;
     let input = input.validate()?;
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let host_id = match input.host_name.as_deref() {
@@ -86,7 +77,7 @@ pub(super) async fn register(
     };
 
     sqlx::query(
-        "INSERT INTO nodes (id, host_id, name, kind, tags, notes) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO nodes (id, host_id, name, kind, tags, notes, ssh_profile) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(host_id)
@@ -94,13 +85,13 @@ pub(super) async fn register(
     .bind(input.kind.as_str())
     .bind(model::tags_json(&input.tags)?)
     .bind(&input.notes)
+    .bind(&input.ssh_profile)
     .execute(&mut *tx)
     .await?;
 
-    let enrollment = credentials::issue(&mut tx, &id).await?;
-    model::audit(&mut tx, actor, &id, "node_create").await?;
+    model::audit(&mut tx, &session.username, &id, "node_create").await?;
     tx.commit().await?;
-    Ok(enrollment)
+    Ok((StatusCode::CREATED, Json(model::get(&pool, &id).await?)))
 }
 
 pub(super) async fn update(
@@ -121,6 +112,16 @@ pub(super) async fn update(
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
+    if let Some(profile) = &input.ssh_profile {
+        let bound: Option<String> =
+            sqlx::query_scalar("SELECT ssh_profile FROM nodes WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if bound.is_some_and(|current| current != *profile) {
+            return Err(ApiError::INVALID_INPUT);
+        }
+    }
     let effective_kind = kind.unwrap_or(&existing_kind);
     let host_id = match input.host_name.as_ref().and_then(|name| name.as_deref()) {
         Some(name) => Some(hosts::resolve_id(&mut tx, effective_kind, name).await?),
@@ -133,7 +134,7 @@ pub(super) async fn update(
              tags = COALESCE(?, tags), notes = COALESCE(?, notes),
              wsl_distro = CASE WHEN ? = 'linux' THEN NULL ELSE wsl_distro END,
              host_id = CASE WHEN ? THEN ? ELSE host_id END,
-             updated_at = unixepoch()
+             ssh_profile = COALESCE(?, ssh_profile), updated_at = unixepoch()
          WHERE id = ?",
     )
     .bind(&input.name)
@@ -143,6 +144,7 @@ pub(super) async fn update(
     .bind(kind)
     .bind(replace_host)
     .bind(host_id)
+    .bind(&input.ssh_profile)
     .bind(&id)
     .execute(&mut *tx)
     .await?;
@@ -181,45 +183,4 @@ pub(super) async fn remove(
     model::audit(&mut tx, &session.username, &id, "node_remove").await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub(super) async fn issue(
-    _csrf: Csrf,
-    session: AdminSession,
-    State(pool): State<SqlitePool>,
-    Path(id): Path<String>,
-) -> Result<(StatusCode, Json<IssuedEnrollment>), ApiError> {
-    model::check_id(&id)?;
-    let mut tx = pool.begin().await?;
-    require_node(&mut tx, &id).await?;
-    let enrollment = credentials::issue(&mut tx, &id).await?;
-    model::audit(&mut tx, &session.username, &id, "enrollment_issue").await?;
-    tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(enrollment)))
-}
-
-pub(super) async fn revoke(
-    _csrf: Csrf,
-    session: AdminSession,
-    State(pool): State<SqlitePool>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    model::check_id(&id)?;
-    let mut tx = pool.begin().await?;
-    require_node(&mut tx, &id).await?;
-    credentials::revoke(&mut tx, &id).await?;
-    model::audit(&mut tx, &session.username, &id, "credential_revoke").await?;
-    tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn require_node(tx: &mut Transaction<'_, Sqlite>, id: &str) -> Result<(), ApiError> {
-    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM nodes WHERE id = ?)")
-        .bind(id)
-        .fetch_one(&mut **tx)
-        .await?;
-    if !exists {
-        return Err(ApiError::NOT_FOUND);
-    }
-    Ok(())
 }

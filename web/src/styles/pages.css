@@ -141,11 +141,3 @@
   grid-template-columns: minmax(0, 1fr);
 }
 .node-configuration .fields { min-width: 0; grid-template-columns: minmax(0, 1fr); }
-.node-configuration .deployment-output {
-  min-height: min(20rem, 45vh);
-  max-height: 65vh;
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.6;
-}

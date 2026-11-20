@@ -1,5 +1,4 @@
 pub mod accounts;
-pub mod agent_bus;
 pub mod alerts;
 pub mod app;
 pub mod assets;
@@ -13,5 +12,7 @@ pub mod nodes;
 pub mod operations;
 pub mod service_monitors;
 pub mod settings;
+pub mod ssh;
+pub mod ssh_bus;
 pub mod terminal;
 pub mod trends;

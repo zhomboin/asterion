@@ -65,20 +65,21 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
             scope={<>{data.kind === 'wsl' ? '监控范围 · WSL' : '监控范围 · Linux'}{data.wsl_distro && ' · ' + data.wsl_distro}</>}
             actions={<>
               <a className="text-link" href={'/operations?node_id=' + encodeURIComponent(id)}>任务记录</a>
-              <a className="text-link" href={base + '/deploy'}>Agent 接入</a>
+              <a className="text-link" href={base + '/manage'}>SSH 连接</a>
               <NodeStatus node={data} />
             </>}
           />
           <dl className="detail-facts node-facts">
             <div><dt>系统</dt><dd>{[data.os, data.arch].filter(Boolean).join(' · ') || '—'}</dd></div>
-            <div><dt>Agent 版本</dt><dd>{data.agent_version ?? '—'}</dd></div>
-            <div><dt>最近心跳</dt><dd><Timestamp value={data.last_seen_at} /></dd></div>
+            <div><dt>SSH 连接</dt><dd>{data.ssh_profile ?? '—'}</dd></div>
+            <div><dt>最近连接</dt><dd><Timestamp value={data.last_seen_at} /></dd></div>
             <div><dt>节点 ID</dt><dd className="technical">{data.id}</dd></div>
           </dl>
+          {data.ssh_error && <p role="alert">{data.ssh_error}</p>}
           <Tabs label="节点监控视图" items={tabItems} value={activeTab} onChange={setTab} />
           {activeTab === 'metrics' && <MetricsPanel base={base} onExpired={onExpired} />}
           {activeTab === 'accounts' && !online && (
-            <p className="empty">{node.error ? '暂时无法确认 Agent 状态' : data.status === 'pending' ? 'Agent 尚未连接' : 'Agent 离线，实时查询暂不可用'}</p>
+            <p className="empty">{node.error ? '暂时无法确认 SSH 状态' : data.status === 'pending' ? 'SSH 尚未连接' : 'SSH 离线，实时查询暂不可用'}</p>
           )}
           {activeTab === 'processes' && <ProcessesPanel base={base} online={online} onExpired={onExpired} operations={operations} />}
           {activeTab === 'docker' && <DockerPanel base={base} online={online} onExpired={onExpired} operations={operations} />}
@@ -87,7 +88,7 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
               base={base} nodeId={id} online={online} controls={operations} onExpired={onExpired} />}
           {activeTab === 'systemd' && <SystemdPanel
             base={base}
-            agentState={node.error ? 'unknown' : data.status}
+            connectionState={node.error ? 'unknown' : data.status}
             initialUnit={initialUnit}
             onExpired={onExpired}
             operations={operations}

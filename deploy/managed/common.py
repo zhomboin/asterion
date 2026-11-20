@@ -2,7 +2,6 @@ import hashlib
 import json
 import os
 import re
-import signal
 import stat
 import subprocess
 import tempfile
@@ -20,7 +19,9 @@ def require(condition, code="operation_denied"):
 
 
 def key_ok(text):
-    return isinstance(text, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}", text)
+    return isinstance(text, str) and re.fullmatch(
+        r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}", text
+    )
 
 
 def digest(data):
@@ -39,7 +40,11 @@ def fixed_path(value, *, directory=False):
         require(info.st_uid in (0, os.geteuid()) and not info.st_mode & 0o022)
     info = path.lstat()
     require(info.st_uid in (0, os.geteuid()) and not info.st_mode & 0o022)
-    require(stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+    require(
+        stat.S_ISDIR(info.st_mode)
+        if directory
+        else stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+    )
     return path
 
 
@@ -68,20 +73,26 @@ def atomic(path, data, original=None):
 
 def command(args, timeout=15, *, capture=False):
     with tempfile.TemporaryFile() as output:
-        process = subprocess.Popen(args, stdin=subprocess.DEVNULL,
-                                   stdout=output if capture else subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, start_new_session=True,
-                                   **({"group": 0, "extra_groups": []} if os.geteuid() == 0 else {}),
-                                   env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C",
-                                        "DEBIAN_FRONTEND": "noninteractive"})
+        process = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=output if capture else subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **({"group": 0, "extra_groups": []} if os.geteuid() == 0 else {}),
+            env={
+                "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+                "LC_ALL": "C",
+                "DEBIAN_FRONTEND": "noninteractive",
+            },
+        )
         try:
             status = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGTERM)
+            process.terminate()
             try:
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
+                process.kill()
                 process.wait()
             raise Refused("timeout") from None
         output.seek(0)
@@ -91,4 +102,17 @@ def command(args, timeout=15, *, capture=False):
 
 
 def result(message, status=0):
-    return {"exit_code": status, "output": message, "truncated": False, "duration_ms": 0}
+    return {
+        "exit_code": status,
+        "output": message,
+        "truncated": False,
+        "duration_ms": 0,
+    }
+
+
+def redact(text):
+    secret = r"password|passwd|passphrase|authorization:|bearer |token|secret|api[_-]?key|private[_ -]key|client-key|key=|--key|credential|://[^/\s]+@"
+    return "\n".join(
+        "[已隐藏可能包含凭据的内容]" if re.search(secret, line, re.I) else line
+        for line in text.split("\n")
+    )

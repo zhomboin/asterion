@@ -1,0 +1,114 @@
+{
+  "node": {
+    "host": "<目标主机>",
+    "user": "<SSH用户名>",
+    "port": 22,
+    "policy": {
+      "managed": {
+        "packages": {
+          "utility": {
+            "package": "<已审核的 Debian 软件包名>"
+          }
+        },
+        "configs": {
+          "app-settings": {
+            "path": "<无密钥的应用 JSON 配置文件绝对路径>",
+            "unit": "<完整服务名.service>",
+            "reload": "reload",
+            "fields": {
+              "log_level": {
+                "choices": [
+                  "info",
+                  "warn",
+                  "error"
+                ]
+              },
+              "workers": {
+                "min": 1,
+                "max": 8
+              }
+            }
+          }
+        },
+        "containers": {
+          "app": {
+            "name": "<容器名称>",
+            "engine_id": "<本机 Engine ID>",
+            "terminal": false,
+            "profiles": {
+              "standard": {
+                "image": "<本地镜像地址>@sha256:<64位摘要>",
+                "restart": "unless-stopped",
+                "restart_choices": [
+                  "no",
+                  "unless-stopped",
+                  "on-failure"
+                ],
+                "port_choices": [],
+                "mount_choices": {
+                  "extra-config": {
+                    "source": "<可选配置文件绝对路径>",
+                    "destination": "<可选容器内绝对路径>"
+                  }
+                },
+                "ports": [],
+                "mounts": [
+                  {
+                    "source": "<非敏感配置文件绝对路径>",
+                    "destination": "<容器内绝对路径>"
+                  },
+                  {
+                    "volume": "<已有命名数据卷>",
+                    "destination": "<容器内数据目录>"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "systemd_units": [
+        "<允许操作的完整服务 Unit 名称>"
+      ],
+      "process": {
+        "term": false,
+        "kill": false
+      },
+      "commands": [
+        {
+          "name": "echo_value",
+          "program": "/usr/bin/printf",
+          "args": [
+            "%s",
+            {
+              "parameter": "value"
+            }
+          ],
+          "parameters": {
+            "value": {
+              "type": "identifier",
+              "max_length": 32
+            }
+          },
+          "timeout_seconds": 5
+        }
+      ],
+      "accounts": {
+        "usernames": [
+          "<允许管理的普通用户名>"
+        ],
+        "groups": [
+          "<允许变更的普通补充组名>"
+        ]
+      },
+      "docker_targets": [
+        {
+          "engine_id": "<Docker Engine ID>",
+          "container_ids": [
+            "<64 位 Docker 容器 ID>"
+          ]
+        }
+      ]
+    }
+  }
+}

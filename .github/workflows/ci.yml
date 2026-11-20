@@ -19,8 +19,10 @@ jobs:
       - run: cargo +stable test --locked --workspace
       - run: python3 scripts/dependency_licenses.py
       - run: python3 -B -m unittest discover -s deploy/managed
-      - run: sudo apt-get update && sudo apt-get install -y python3-paramiko
-      - run: /usr/bin/python3 -B -m unittest discover -s deploy/ssh-enrollment
+      - run: python3 -B -m unittest discover -s deploy/ssh
+      - run: sudo apt-get update && sudo apt-get install -y openssh-server
+      - run: cargo +stable build --locked -p asterion-server
+      - run: python3 -B scripts/test_ssh.py
 
   center-install:
     strategy:
@@ -58,11 +60,11 @@ jobs:
           set result [wait]
           exit [expr {[lindex $result 2] != 0 || [lindex $result 3] != 1}]
           TCL
-      - name: 验收中心证书、面板鉴权及节点操作补配
+      - name: 验收中心证书、面板鉴权及重复安装
         run: bash .github/workflows/check_center_acme.sh
       - name: 查看安装服务日志
         if: failure()
-        run: sudo journalctl --no-pager -o short-precise -u asterion-server.service -u asterion-agent.service -u asterion-managed@configs.service -u asterion-managed@containers.service -n 100
+        run: sudo journalctl --no-pager -o short-precise -u asterion-server.service -n 100
 
   web:
     runs-on: ubuntu-latest

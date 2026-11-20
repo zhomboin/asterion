@@ -10,9 +10,9 @@ use sqlx::SqlitePool;
 
 use super::ApiError;
 use super::metrics::ensure_node;
-use crate::agent_bus::{AgentBus, BusError};
 use crate::assets::observe;
 use crate::auth::AdminSession;
+use crate::ssh_bus::{BusError, SshBus};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,7 +26,7 @@ pub(super) struct ProcessQuery {
 pub(super) async fn processes(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(id): Path<String>,
     options: Result<Query<ProcessQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -56,7 +56,7 @@ pub(super) async fn processes(
 pub(super) async fn process(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path((id, pid)): Path<(String, u32)>,
 ) -> Result<Json<Value>, ApiError> {
     if pid == 0 || pid > i32::MAX as u32 {
@@ -68,7 +68,7 @@ pub(super) async fn process(
 pub(super) async fn docker(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(id): Path<String>,
     options: Result<Query<UnitQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -84,7 +84,7 @@ pub(super) async fn docker(
 pub(super) async fn docker_stats(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path((id, container)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
     if !is_container_id(&container) {
@@ -102,7 +102,7 @@ pub(super) struct LogsQuery {
 pub(super) async fn docker_logs(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path((id, container)): Path<(String, String)>,
     query: Result<Query<LogsQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -130,7 +130,7 @@ pub(super) struct UnitQuery {
 pub(super) async fn systemd(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(id): Path<String>,
     query: Result<Query<UnitQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -145,7 +145,7 @@ pub(super) async fn systemd(
 pub(super) async fn systemd_service(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path((id, unit)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
     if unit.starts_with('-')
@@ -162,7 +162,7 @@ pub(super) async fn systemd_service(
 
 async fn run_query(
     pool: &SqlitePool,
-    bus: &AgentBus,
+    bus: &SshBus,
     id: &str,
     kind: &str,
     args: Value,
@@ -184,47 +184,45 @@ pub(crate) fn bus_error(error: BusError) -> ApiError {
     match error {
         BusError::Offline => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            "agent_offline",
-            "Agent 当前未连接",
+            "ssh_offline",
+            "SSH 连接不可用",
         ),
         BusError::Busy => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            "agent_busy",
-            "Agent 查询繁忙，请稍后重试",
+            "ssh_busy",
+            "SSH 查询繁忙，请稍后重试",
         ),
         BusError::Timeout => ApiError::new(
             StatusCode::GATEWAY_TIMEOUT,
-            "agent_timeout",
-            "等待 Agent 查询超时",
+            "ssh_timeout",
+            "等待 SSH 查询超时",
         ),
         BusError::Unsupported => ApiError::new(
             StatusCode::CONFLICT,
-            "agent_upgrade_required",
-            "请升级 Agent 后查询",
+            "ssh_unavailable",
+            "请检查 SSH 配置后查询",
         ),
         BusError::Rejected { code, .. } => match &*code {
             "permission_denied" => ApiError::new(
                 StatusCode::FORBIDDEN,
-                "agent_permission_denied",
-                "Agent 没有读取权限",
+                "ssh_permission_denied",
+                "SSH 没有读取权限",
             ),
             "not_found" => ApiError::new(
                 StatusCode::NOT_FOUND,
-                "agent_resource_not_found",
+                "ssh_resource_not_found",
                 "节点上已找不到此资源",
             ),
             "invalid_input" | "invalid_argument" => ApiError::INVALID,
             "unavailable" | "unreachable" | "not_installed" | "disabled" => ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "agent_resource_unavailable",
+                "ssh_resource_unavailable",
                 "节点上的资源当前不可用",
             ),
-            "timeout" => {
-                ApiError::new(StatusCode::GATEWAY_TIMEOUT, "agent_timeout", "节点读取超时")
-            }
+            "timeout" => ApiError::new(StatusCode::GATEWAY_TIMEOUT, "ssh_timeout", "节点读取超时"),
             _ => ApiError::new(
                 StatusCode::BAD_GATEWAY,
-                "agent_query_failed",
+                "ssh_query_failed",
                 "节点未能完成查询",
             ),
         },

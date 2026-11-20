@@ -1,9 +1,9 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use crate::agent_bus::BusError;
 use crate::auth::AuthError;
 use crate::monitor::ApiError;
+use crate::ssh_bus::BusError;
 
 pub(super) const NOT_FOUND: ApiError = ApiError::new(
     StatusCode::NOT_FOUND,
@@ -22,8 +22,8 @@ pub(super) const LIMIT_REACHED: ApiError = ApiError::new(
 );
 pub(super) const BUSY: ApiError = ApiError::new(
     StatusCode::SERVICE_UNAVAILABLE,
-    "agent_busy",
-    "Agent 正在处理其他请求",
+    "ssh_busy",
+    "SSH 正在处理其他请求",
 );
 
 #[derive(Debug)]
@@ -55,19 +55,19 @@ pub(super) fn bus_error(error: BusError) -> ApiError {
     match error {
         BusError::Offline => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            "agent_offline",
-            "Agent 当前未连接",
+            "ssh_offline",
+            "SSH 连接不可用",
         ),
         BusError::Busy => BUSY,
         BusError::Timeout => ApiError::new(
             StatusCode::GATEWAY_TIMEOUT,
-            "agent_timeout",
-            "等待 Agent 响应超时",
+            "ssh_timeout",
+            "等待 SSH 响应超时",
         ),
         BusError::Unsupported => ApiError::new(
             StatusCode::CONFLICT,
-            "agent_upgrade_required",
-            "请升级 Agent 后操作",
+            "ssh_unavailable",
+            "请检查 SSH 配置后操作",
         ),
         BusError::Rejected { .. } => ApiError::new(
             StatusCode::BAD_GATEWAY,

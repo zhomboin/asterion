@@ -1,8 +1,5 @@
 [workspace]
 members = [
-    "crates/asterion-agent",
-    "crates/asterion-collector",
-    "crates/asterion-executor",
     "crates/asterion-protocol",
     "crates/asterion-server",
 ]

@@ -17,7 +17,7 @@ export function SettingsPage({ username, onExpired }: { username: string; onExpi
         <Card title="管理面板">
           <dl className="detail-facts asset-facts">
             <div><dt>当前账号</dt><dd>{username}</dd></div>
-            <div><dt>连接凭证</dt><dd><a className="text-link" href="/nodes">管理节点凭证</a></dd></div>
+            <div><dt>SSH 连接</dt><dd><a className="text-link" href="/nodes">管理节点连接</a></dd></div>
           </dl>
         </Card>
         <Card title="采集与保留" label="采集与保留">

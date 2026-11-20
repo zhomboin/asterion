@@ -204,7 +204,7 @@ export function NodeStatus({ node }: { node: Node }) {
   return (
     <span className="status" data-status={node.status}>
       <span aria-hidden="true" />
-      {node.kind === 'wsl' && node.status === 'offline' ? 'Agent 失联' : nodeStatusLabel[node.status]}
+      {node.kind === 'wsl' && node.status === 'offline' ? 'SSH 失联' : nodeStatusLabel[node.status]}
     </span>
   );
 }

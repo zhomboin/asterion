@@ -31,7 +31,7 @@ export function ProcessesPanel({ base, online, onExpired, operations }: {
       <h2>已纳管进程</h2>
       <button type="button" className="primary" disabled={!online} onClick={() => setAdding(true)}>添加监控</button>
     </div>
-    {!online && <p className="observation">Agent 未连接，实时状态不可用</p>}
+    {!online && <p className="observation">SSH 未连接，实时状态不可用</p>}
     {list.registry.loading && <p role="status">正在读取纳管清单…</p>}
     {list.registry.error && <Problem error={list.registry.error} retry={list.refresh} />}
     {list.snapshot.error && <Problem error={list.snapshot.error} retry={list.refresh} />}

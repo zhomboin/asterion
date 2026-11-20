@@ -1,4 +1,4 @@
-use asterion_protocol::{HEARTBEAT_TIMEOUT_SECS, MAX_SAMPLE_INTERVAL_SECS};
+use asterion_protocol::MAX_SAMPLE_INTERVAL_SECS;
 use serde_json::Value;
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
 
@@ -17,7 +17,7 @@ struct Rule {
     for_seconds: i64,
     breach_since: Option<i64>,
     last_sample_at: Option<i64>,
-    last_seen_at: Option<i64>,
+    ssh_online_until: Option<i64>,
     now: i64,
 }
 
@@ -27,7 +27,7 @@ pub async fn evaluate(pool: &SqlitePool, sample_interval_secs: u64) -> Result<()
     loop {
         let mut tx = pool.begin().await?;
         let rules = sqlx::query_as::<_, Rule>(
-            "SELECT r.*, n.name AS node_name, n.last_seen_at, unixepoch() AS now FROM alert_rules r
+            "SELECT r.*, n.name AS node_name, n.ssh_online_until, unixepoch() AS now FROM alert_rules r
              JOIN nodes n ON n.id = r.node_id WHERE r.enabled = 1 AND r.id > ? ORDER BY r.id LIMIT ?",
         )
         .bind(&after)
@@ -54,10 +54,10 @@ pub async fn evaluate(pool: &SqlitePool, sample_interval_secs: u64) -> Result<()
 }
 
 async fn offline(connection: &mut SqliteConnection, rule: &Rule) -> Result<(), sqlx::Error> {
-    let Some(last_seen) = rule.last_seen_at else {
+    let Some(until) = rule.ssh_online_until else {
         return Ok(());
     };
-    let offline_for = rule.now - (last_seen + HEARTBEAT_TIMEOUT_SECS as i64);
+    let offline_for = rule.now - until;
     if offline_for < 0 {
         close_event(connection, rule, rule.now).await?;
     } else if offline_for >= rule.for_seconds {

@@ -12,9 +12,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
-use crate::agent_bus::{AgentBus, BusError};
 use crate::auth::{AdminSession, AuthError, Csrf, verify_step_up};
 use crate::monitor::ApiError;
+use crate::ssh_bus::{BusError, SshBus};
 
 const LIFETIME: Duration = Duration::from_secs(900);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(12);
@@ -54,7 +54,7 @@ impl TerminalHub {
         }
     }
 
-    pub(crate) fn revoke_binding(&self, binding: &[u8; 32], bus: &Arc<AgentBus>) {
+    pub(crate) fn revoke_binding(&self, binding: &[u8; 32], bus: &Arc<SshBus>) {
         let mut revoked = Vec::new();
         self.sessions
             .lock()
@@ -132,7 +132,7 @@ impl TerminalHub {
 
 struct OpeningReservation<'a> {
     hub: &'a TerminalHub,
-    bus: &'a Arc<AgentBus>,
+    bus: &'a Arc<SshBus>,
     node: &'a str,
     id: Option<String>,
     dispatched: bool,
@@ -156,7 +156,7 @@ impl Drop for OpeningReservation<'_> {
     }
 }
 
-fn close_in_background(bus: &Arc<AgentBus>, node: String, id: String) {
+fn close_in_background(bus: &Arc<SshBus>, node: String, id: String) {
     let bus = Arc::clone(bus);
     tokio::spawn(async move {
         for attempt in 0..3 {
@@ -179,7 +179,7 @@ async fn capability(
     _: AdminSession,
     State(pool): State<SqlitePool>,
     Extension(hub): Extension<Arc<TerminalHub>>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(node): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     crate::monitor::ensure_node(&pool, &node).await?;
@@ -203,7 +203,7 @@ struct Dimensions {
 async fn container_capability(
     _: AdminSession,
     Extension(hub): Extension<Arc<TerminalHub>>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(node): Path<String>,
 ) -> Json<Value> {
     let enabled = hub.enabled
@@ -243,7 +243,7 @@ async fn open(
     session: AdminSession,
     State(pool): State<SqlitePool>,
     Extension(hub): Extension<Arc<TerminalHub>>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(node): Path<String>,
     Json(body): Json<Opening>,
 ) -> Result<(StatusCode, Json<Value>), OpenError> {
@@ -323,11 +323,11 @@ async fn open(
     if result["opened"] != true {
         return Err(OpenError::Api(ApiError::new(
             StatusCode::BAD_GATEWAY,
-            "agent_invalid_reply",
+            "ssh_invalid_reply",
             "节点未确认终端开启",
         )));
     }
-    // 如果等待 Agent 时登录会话被注销，释放保留项并再次关闭该终端。
+    // 如果等待 SSH 时登录会话被注销，释放保留项并再次关闭该终端。
     hub.node(&id, &session).map_err(OpenError::Api)?;
     let id = reservation.commit();
     tracing::info!(action = "terminal_open", actor = %session.username, node_id = %node, terminal_id = %id,
@@ -344,7 +344,7 @@ struct Offset {
 
 async fn poll(
     session: AdminSession,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Extension(hub): Extension<Arc<TerminalHub>>,
     Path(id): Path<String>,
     Query(query): Query<Offset>,
@@ -370,7 +370,7 @@ struct Input {
 async fn input(
     _: Csrf,
     session: AdminSession,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Extension(hub): Extension<Arc<TerminalHub>>,
     Path(id): Path<String>,
     Json(input): Json<Input>,
@@ -393,7 +393,7 @@ async fn input(
 async fn resize(
     _: Csrf,
     session: AdminSession,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Extension(hub): Extension<Arc<TerminalHub>>,
     Path(id): Path<String>,
     Json(size): Json<Dimensions>,
@@ -415,7 +415,7 @@ async fn resize(
 
 async fn query_session(
     hub: &TerminalHub,
-    bus: &AgentBus,
+    bus: &SshBus,
     id: &str,
     session: &AdminSession,
     kind: &str,
@@ -441,7 +441,7 @@ fn session_unavailable(error: &BusError) -> bool {
 async fn close(
     _: Csrf,
     session: AdminSession,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Extension(hub): Extension<Arc<TerminalHub>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
@@ -460,20 +460,12 @@ fn bus_error(error: BusError) -> ApiError {
     let (status, code, message) = match error {
         BusError::Offline => (
             StatusCode::SERVICE_UNAVAILABLE,
-            "agent_offline",
-            "节点 Agent 未连接",
+            "ssh_offline",
+            "节点 SSH 未连接",
         ),
-        BusError::Unsupported => (
-            StatusCode::CONFLICT,
-            "agent_upgrade_required",
-            "请升级节点 Agent",
-        ),
-        BusError::Busy => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "agent_busy",
-            "节点任务繁忙",
-        ),
-        BusError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "agent_timeout", "节点响应超时"),
+        BusError::Unsupported => (StatusCode::CONFLICT, "ssh_unavailable", "请升级节点 Agent"),
+        BusError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "ssh_busy", "节点任务繁忙"),
+        BusError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "ssh_timeout", "节点响应超时"),
         BusError::Rejected { code, .. } => match code.as_str() {
             "terminal_closed" => return MISSING,
             "terminal_disabled" => (StatusCode::FORBIDDEN, "terminal_disabled", "节点未启用终端"),
@@ -484,11 +476,7 @@ fn bus_error(error: BusError) -> ApiError {
             ),
             "not_found" => (StatusCode::NOT_FOUND, "not_found", "节点未找到记录"),
             "invalid_request" | "invalid_input" => return ApiError::INVALID,
-            _ => (
-                StatusCode::BAD_GATEWAY,
-                "agent_rejected",
-                "节点拒绝了此请求",
-            ),
+            _ => (StatusCode::BAD_GATEWAY, "ssh_rejected", "节点拒绝了此请求"),
         },
     };
     ApiError::new(status, code, message)
@@ -510,19 +498,19 @@ impl IntoResponse for OpenError {
 
 #[cfg(test)]
 mod tests {
-    use asterion_protocol::AgentReply;
+    use asterion_protocol::TaskReply;
     use axum::body::Body;
     use axum::http::{Request, header};
     use sha2::{Digest, Sha256};
     use tower::ServiceExt;
 
     use super::*;
-    use crate::agent_bus::Control;
+    use crate::ssh_bus::Control;
 
     #[tokio::test]
     async fn logout_closes_only_terminals_bound_to_its_panel_session() {
         let pool = crate::database::connect("sqlite::memory:").await.unwrap();
-        let bus = Arc::new(AgentBus::new(15));
+        let bus = Arc::new(SshBus::new(15));
         let hub = Arc::new(TerminalHub::new(true));
         let node = "3".repeat(32);
         let mut agent = bus.attach(&node, true);
@@ -580,7 +568,7 @@ mod tests {
         assert_eq!(dispatch.request.args, json!({"id":owner_id}));
         dispatch
             .response
-            .send(AgentReply::Success { value: Value::Null })
+            .send(TaskReply::Success { value: Value::Null })
             .unwrap();
     }
 
@@ -602,7 +590,7 @@ mod tests {
                 (neighbor.clone(), session()),
             ])),
         };
-        let bus = Arc::new(AgentBus::new(15));
+        let bus = Arc::new(SshBus::new(15));
         let mut agent = bus.attach(&node, true);
         let reservation = OpeningReservation {
             hub: &hub,
@@ -628,7 +616,7 @@ mod tests {
         assert_eq!(dispatch.request.args, json!({"id":id}));
         dispatch
             .response
-            .send(AgentReply::Success { value: Value::Null })
+            .send(TaskReply::Success { value: Value::Null })
             .unwrap();
     }
 }

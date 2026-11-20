@@ -81,7 +81,7 @@ pub(super) async fn list(
     }
 
     let mut discoveries = sqlx::query_as::<_, Discovery>(
-        "SELECT id, kind, resource_id, resource_scope, name, metadata, observed_at, 'agent' AS source
+        "SELECT id, kind, resource_id, resource_scope, name, metadata, observed_at, source
          FROM discovered_resources WHERE node_id = ? AND (? IS NULL OR kind = ?)
          ORDER BY observed_at DESC, id LIMIT ? OFFSET ?",
     )
@@ -106,7 +106,7 @@ pub(super) async fn bindings(
 ) -> Result<Vec<Binding>, ApiError> {
     Ok(sqlx::query_as::<_, Binding>(
         "SELECT d.id, d.kind, d.resource_id, d.resource_scope, d.name, d.metadata, d.observed_at,
-         'agent' AS source, b.bound_at FROM asset_bindings b
+         d.source, b.bound_at FROM asset_bindings b
          JOIN discovered_resources d ON d.id = b.discovery_id
          WHERE b.asset_id = ? ORDER BY b.bound_at, d.id",
     )
@@ -137,10 +137,10 @@ pub(crate) async fn observe(
     for entry in observations {
         sqlx::query(
             "INSERT INTO discovered_resources
-                (id, node_id, kind, resource_scope, resource_id, name, metadata, observed_at)
-             SELECT ?, ?, ?, ?, ?, ?, ?, unixepoch() WHERE EXISTS (SELECT 1 FROM nodes WHERE id = ?)
+                (id, node_id, kind, resource_scope, resource_id, name, metadata, observed_at, source)
+             SELECT ?, ?, ?, ?, ?, ?, ?, unixepoch(), 'ssh' WHERE EXISTS (SELECT 1 FROM nodes WHERE id = ?)
              ON CONFLICT(id) DO UPDATE SET name = excluded.name, metadata = excluded.metadata,
-                 observed_at = excluded.observed_at",
+                 observed_at = excluded.observed_at, source = excluded.source",
         )
         .bind(resource_id(node_id, &entry))
         .bind(node_id)

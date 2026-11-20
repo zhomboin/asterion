@@ -41,7 +41,7 @@ export function LongTrends({ base, range, onExpired }: { base: string; range: Lo
       {result.data && last && (
         <>
           <p className="observation">
-            来源 · Agent · 聚合间隔 {result.data.bucket_seconds} 秒 · 最近观测 <Timestamp value={last.observed_at} />
+            来源 · SSH · 聚合间隔 {result.data.bucket_seconds} 秒 · 最近观测 <Timestamp value={last.observed_at} />
           </p>
           <TimeSeries
             title="资源趋势"

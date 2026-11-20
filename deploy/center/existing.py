@@ -1,19 +1,15 @@
 """核对手动安装留下的文件、服务和发布内容。"""
 
 import filecmp
-import grp
-import json
 import os
-import pwd
 import re
 import shutil
 import sqlite3
 import stat
-import subprocess
 import tempfile
 from pathlib import Path
 
-from inputs import domain_ok, ipv4
+from inputs import domain_ok
 
 
 def trusted(path, directory=False, private=False):
@@ -70,7 +66,7 @@ def ensure_env(path, expected, put):
             tmp.unlink(missing_ok=True)
 
 
-def hints(config, sites, sudoers):
+def hints(config, sites):
     result = {}
     env = env_values(config / "server.env")
     fields = [
@@ -80,8 +76,6 @@ def hints(config, sites, sudoers):
             r"127\.0\.0\.1:([1-9][0-9]{3,4})",
             lambda s: int(s) <= 65535,
         ),
-        ("domain", "ASTERION_SSH_DEPLOY_CENTER_URL", r"https://([^/]+)/?", domain_ok),
-        ("node", "ASTERION_SSH_DEPLOY_NETWORKS", r"([^/]+)/32", ipv4),
     ]
     for name, key, pattern, valid in fields:
         if key in env:
@@ -106,53 +100,7 @@ def hints(config, sites, sudoers):
             and result.get("domain", domain[1]) == domain[1]
         ):
             result["domain"] = domain[1]
-    names = [p.name[len("asterion-") :] for p in sudoers.glob("asterion-*")]
-    if len(names) == 1:
-        result["ops"] = names[0]
     return result
-
-
-def login_account(name):
-    try:
-        account = pwd.getpwnam(name)
-    except KeyError:
-        try:
-            grp.getgrnam(name)
-        except KeyError:
-            return None
-        raise ValueError(f"只有同名组，无法确认运维账号 {name}")
-    home = Path(account.pw_dir)
-    if (
-        not 1000 <= account.pw_uid < 65534
-        or not home.is_absolute()
-        or account.pw_shell.rsplit("/", 1)[-1] in {"false", "nologin", ""}
-    ):
-        raise ValueError(f"{name} 不是可复用的普通登录账号")
-    if home.is_symlink() or not home.is_dir() or home.stat().st_uid != account.pw_uid:
-        raise ValueError(f"运维账号 {name} 的家目录属主或类型不符")
-    return account
-
-
-def authorized_keys(account):
-    path = Path(account.pw_dir) / ".ssh/authorized_keys"
-    # 使用账号自己的权限检查和使用 SSH 目录。
-    return (
-        subprocess.run(
-            [
-                "runuser",
-                "-u",
-                account.pw_name,
-                "--",
-                "sh",
-                "-c",
-                'test -f "$1" && test -r "$1" && test -s "$1"',
-                "sh",
-                path,
-            ],
-            check=False,
-        ).returncode
-        == 0
-    )
 
 
 def check_link(path, target):
@@ -213,21 +161,3 @@ def admin_name(database):
             row = conn.execute("SELECT username FROM panel_admin WHERE id=1").fetchone()
             return row[0] if row else None
     return None
-
-
-def local_identity(path, port):
-    if not os.path.lexists(path):
-        return None
-    if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_mode & 0o077:
-        raise ValueError(f"Agent 身份文件类型或权限不符：{path}")
-    identity = json.loads(path.read_text())
-    if identity.get(
-        "endpoint"
-    ) != f"wss://127.0.0.1:{port}/api/v1/agent/connect" or not re.fullmatch(
-        r"[a-f0-9]{64}", identity.get("bearer", "")
-    ):
-        raise ValueError("已有 Agent 身份与目标中心不符")
-    node = identity.get("node_id")
-    if node is not None and not re.fullmatch(r"[a-f0-9]{32}", node):
-        raise ValueError("已有 Agent 节点编号无效")
-    return node
