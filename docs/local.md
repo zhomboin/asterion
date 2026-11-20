@@ -14,7 +14,7 @@
    bash start.sh
    ```
 
-3. 首次在终端设置面板口令。浏览器打开终端显示的本机地址，默认是 `http://127.0.0.1:8080`，账号为 `local`。Windows 浏览器可通过 WSL 的 localhost 转发访问这个地址。端口占用时运行 `ASTERION_LOCAL_PORT=8081 bash start.sh`。
+3. 首次在终端设置面板口令。浏览器打开 `http://127.0.0.1:17110`，使用账号 `local` 登录。Windows 浏览器可通过 WSL 的 localhost 转发访问这个地址。若端口已被占用，可运行 `ASTERION_LOCAL_PORT=17111 bash start.sh`，再打开终端显示的地址。
 
 已有项目源码、Rust stable 和 Node.js 24 时，可在项目根目录直接运行 `bash start.sh`。[本地开发](development.md)
 

@@ -20,9 +20,13 @@ if [[ ! -x $panel ]]; then
     panel=$(realpath -- "$CARGO_TARGET_DIR/debug/asterion-server")
 fi
 
-port=${ASTERION_LOCAL_PORT:-8080}
-[[ $port =~ ^[0-9]{1,5}$ ]] && ((10#$port <= 65535)) || { echo '本机端口无效' >&2; exit 1; }
-export ASTERION_LOCAL=1 ASTERION_LISTEN_ADDR="127.0.0.1:$port"
+export ASTERION_LOCAL=1
+unset ASTERION_LISTEN_ADDR
+if [[ -n ${ASTERION_LOCAL_PORT:-} ]]; then
+    port=$ASTERION_LOCAL_PORT
+    [[ $port =~ ^[0-9]{1,5}$ ]] && ((10#$port <= 65535)) || { echo '本机端口无效' >&2; exit 1; }
+    export ASTERION_LISTEN_ADDR="127.0.0.1:$port"
+fi
 export ASTERION_WEB_DIR="$root/web/dist" ASTERION_DATABASE_URL='sqlite://panel.db'
 export ASTERION_ADMIN_USERNAME=local
 unset ASTERION_ADMIN_PASSWORD_FILE
