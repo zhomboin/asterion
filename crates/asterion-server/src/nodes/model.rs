@@ -27,10 +27,10 @@ pub(super) struct NodeInput {
 }
 
 impl NodeInput {
-    pub fn validate(self) -> Result<Self, ApiError> {
+    pub fn validate(self, local: bool) -> Result<Self, ApiError> {
         Ok(Self {
             name: validate_name(self.name)?,
-            ssh_profile: profile(self.ssh_profile)?,
+            ssh_profile: profile(self.ssh_profile, local)?,
             host_name: self.host_name.map(validate_name).transpose()?,
             kind: self.kind,
             tags: validate_tags(self.tags)?,
@@ -52,7 +52,7 @@ pub(super) struct NodePatch {
 }
 
 impl NodePatch {
-    pub fn validate(self) -> Result<Self, ApiError> {
+    pub fn validate(self, local: bool) -> Result<Self, ApiError> {
         if self.ssh_profile.is_none()
             && self.name.is_none()
             && self.host_name.is_none()
@@ -64,7 +64,10 @@ impl NodePatch {
         }
 
         Ok(Self {
-            ssh_profile: self.ssh_profile.map(profile).transpose()?,
+            ssh_profile: self
+                .ssh_profile
+                .map(|name| profile(name, local))
+                .transpose()?,
             name: self.name.map(validate_name).transpose()?,
             host_name: self
                 .host_name
@@ -83,8 +86,8 @@ fn nullable_name<'de, D: Deserializer<'de>>(
     Option::deserialize(deserializer).map(Some)
 }
 
-fn profile(value: String) -> Result<String, ApiError> {
-    if crate::ssh::valid_profile(&value) {
+fn profile(value: String, local: bool) -> Result<String, ApiError> {
+    if crate::ssh::valid_connection(&value, local) {
         Ok(value)
     } else {
         Err(ApiError::INVALID_INPUT)

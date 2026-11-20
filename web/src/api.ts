@@ -63,6 +63,10 @@ export async function request<T>(
   const { method = 'GET', body, signal, keepalive } = options;
   const timeout = AbortSignal.timeout(12_000);
   const headers = new Headers({ Accept: 'application/json' });
+  const localSession = globalThis.location?.protocol === 'http:' ? globalThis.sessionStorage : undefined;
+  const sessionHeader = 'X-Asterion-Local-Session';
+  const token = localSession?.getItem(sessionHeader);
+  if (token) headers.set(sessionHeader, token);
   if (method !== 'GET') headers.set('X-Asterion-CSRF', '1');
   if (body !== undefined) headers.set('Content-Type', 'application/json');
 
@@ -86,6 +90,11 @@ export async function request<T>(
     throw new ApiError(response.status, message);
   }
 
+  if (localSession && path === '/auth/login') {
+    const issued = response.headers.get(sessionHeader);
+    if (issued) localSession.setItem(sessionHeader, issued);
+  }
+  if (localSession && path === '/auth/logout') localSession.removeItem(sessionHeader);
   if (response.status === 204 || options.response === 'empty') return;
   return response.json() as Promise<T>;
 }

@@ -16,6 +16,8 @@ import time
 import urllib.request
 import urllib.error
 
+from local_panel_test import check_local_panel
+
 
 def port():
     with socket.socket() as sock:
@@ -193,6 +195,12 @@ DisableForwarding yes
         return "/api/v1/nodes/" + node["id"]
 
     node, wrong = create("good"), create("wrong")
+    try:
+        create("ssh://fixture")
+    except urllib.error.HTTPError as error:
+        assert error.code == 400
+    else:
+        raise AssertionError("常驻模式接受了本机 SSH 地址")
     wait(lambda: api(wrong)["status"] == "offline", "主机密钥不匹配必须离线")
     try:
         wait(lambda: api(node)["status"] == "online", "正常 SSH 节点应上线")
@@ -228,6 +236,7 @@ DisableForwarding yes
         "SSH 终端输出缺失",
     )
     print("SSH 主机密钥、节点采样、资源面板、命令退出码和交互终端验证通过")
+    check_local_panel(work, stack, user, ssh_port, port(), launch, wait)
 
 
 if __name__ == "__main__":

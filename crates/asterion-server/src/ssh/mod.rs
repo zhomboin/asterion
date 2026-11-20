@@ -1,4 +1,5 @@
 mod config;
+mod direct;
 mod pty;
 mod transport;
 
@@ -19,12 +20,17 @@ use crate::ssh_bus::{Control, Dispatch, SshBus};
 use config::Target;
 pub(crate) use config::valid_profile;
 
+pub(crate) fn valid_connection(value: &str, local: bool) -> bool {
+    valid_profile(value) || local && direct::Direct::parse(value).is_some()
+}
+
 pub(crate) async fn profiles(
     _: AdminSession,
+    local: Option<axum::Extension<crate::local::LocalPanel>>,
 ) -> Result<Json<Vec<String>>, (StatusCode, Json<Value>)> {
-    config::load()
+    config::load(local.is_some())
         .await
-        .map(|p| Json(p.into_keys().collect()))
+        .map(|p| Json(p.into_keys().filter(|name| valid_profile(name)).collect()))
         .map_err(|_| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -43,7 +49,12 @@ impl Drop for Worker {
     }
 }
 
-pub async fn serve(pool: SqlitePool, bus: Arc<SshBus>, mut shutdown: watch::Receiver<bool>) {
+pub async fn serve(
+    pool: SqlitePool,
+    bus: Arc<SshBus>,
+    mut shutdown: watch::Receiver<bool>,
+    local: bool,
+) {
     let mut workers: HashMap<String, Worker> = HashMap::new();
     let slots = Arc::new(Semaphore::new(32));
     let mut tick = interval(Duration::from_secs(3));
@@ -53,7 +64,7 @@ pub async fn serve(pool: SqlitePool, bus: Arc<SshBus>, mut shutdown: watch::Rece
             _ = shutdown.changed() => break,
             _ = tick.tick() => {}
         }
-        let profiles = config::load().await.unwrap_or_default();
+        let mut profiles = config::load(local).await.unwrap_or_default();
         let Ok(nodes) = sqlx::query_as::<_, (String, String)>(
             "SELECT id, ssh_profile FROM nodes WHERE ssh_profile IS NOT NULL",
         )
@@ -62,6 +73,15 @@ pub async fn serve(pool: SqlitePool, bus: Arc<SshBus>, mut shutdown: watch::Rece
         else {
             continue;
         };
+        if local {
+            for (_, name) in &nodes {
+                if let Some(direct) = direct::Direct::parse(name) {
+                    profiles
+                        .entry(name.clone())
+                        .or_insert_with(|| Target::Direct(direct, Value::Null));
+                }
+            }
+        }
         workers.retain(|id, worker| {
             !worker.task.is_finished()
                 && nodes.iter().any(|(node, profile)| {
@@ -184,7 +204,7 @@ async fn terminal(
     enabled: bool,
     request: asterion_protocol::TaskRequest,
 ) -> TaskReply {
-    let container_enabled = target.policy["managed"]["containers"]
+    let container_enabled = target.policy()["managed"]["containers"]
         .as_object()
         .is_some_and(|items| items.values().any(|spec| spec["terminal"] == true));
     if request.kind == "terminal_container_capability"

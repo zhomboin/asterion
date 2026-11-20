@@ -20,23 +20,33 @@ async fn main() -> Result<()> {
         .init();
 
     let config = Config::from_env()?;
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .map_err(|_| anyhow!("无法初始化 TLS 加密后端"))?;
-    let tls = RustlsConfig::from_pem_file(&config.tls_cert_file, &config.tls_key_file)
-        .await
-        .context("无法加载中心服务的 TLS 证书或私钥")?;
+    let tls = if let Some((cert, key)) = &config.tls {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .map_err(|_| anyhow!("无法初始化 TLS 加密后端"))?;
+        Some(
+            RustlsConfig::from_pem_file(cert, key)
+                .await
+                .context("无法加载中心服务的 TLS 证书或私钥")?,
+        )
+    } else {
+        None
+    };
     let listener = TcpListener::bind(config.listen_addr).context("无法绑定中心服务监听地址")?;
     listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
 
     let (pool, database_guard) = database::connect_center(&config.database_url).await?;
-    auth::bootstrap_admin(
-        &pool,
-        config.admin_username.as_deref(),
-        config.admin_password_file.as_deref(),
-    )
-    .await?;
+    if config.tls.is_none() && config.admin_password_file.is_none() {
+        auth::bootstrap_local_admin(&pool).await?;
+    } else {
+        auth::bootstrap_admin(
+            &pool,
+            config.admin_username.as_deref(),
+            config.admin_password_file.as_deref(),
+        )
+        .await?;
+    }
 
     monitor::purge_metrics(&pool, config.retention_seconds)
         .await
@@ -65,6 +75,7 @@ async fn main() -> Result<()> {
         pool.clone(),
         Arc::clone(&bus),
         shutdown.clone(),
+        tls.is_none(),
     ));
     let app = app::router(pool.clone(), config.web_dir.as_deref(), shutdown, bus);
     let handle = Handle::new();
@@ -75,12 +86,21 @@ async fn main() -> Result<()> {
         shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
     });
 
-    tracing::info!(%address, "中心 HTTPS 服务已启动");
-    let result = from_tcp_rustls(listener, tls)?
-        .handle(handle)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .context("中心服务运行失败");
+    let result = if let Some(tls) = tls {
+        tracing::info!(%address, "中心 HTTPS 服务已启动");
+        from_tcp_rustls(listener, tls)?
+            .handle(handle)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+    } else {
+        println!("本地面板 http://{address} （Ctrl+C 退出）");
+        let app = asterion_server::local::router(app, address);
+        axum_server::from_tcp(listener)?
+            .handle(handle)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+    }
+    .context("面板运行失败");
     signal.abort();
     maintenance.abort();
     service_checks.abort();

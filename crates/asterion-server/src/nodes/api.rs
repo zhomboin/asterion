@@ -64,12 +64,13 @@ pub(super) async fn get(
 pub(super) async fn create(
     _csrf: Csrf,
     session: AdminSession,
+    local: Option<axum::Extension<crate::local::LocalPanel>>,
     State(pool): State<SqlitePool>,
     body: Result<Json<NodeInput>, JsonRejection>,
 ) -> Result<(StatusCode, Json<NodeView>), ApiError> {
     let Json(input) = body.map_err(ApiError::invalid_json)?;
     let id = random_hex::<16>()?;
-    let input = input.validate()?;
+    let input = input.validate(local.is_some())?;
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let host_id = match input.host_name.as_deref() {
         Some(name) => Some(hosts::resolve_id(&mut tx, input.kind.as_str(), name).await?),
@@ -97,13 +98,14 @@ pub(super) async fn create(
 pub(super) async fn update(
     _csrf: Csrf,
     session: AdminSession,
+    local: Option<axum::Extension<crate::local::LocalPanel>>,
     State(pool): State<SqlitePool>,
     Path(id): Path<String>,
     body: Result<Json<NodePatch>, JsonRejection>,
 ) -> Result<Json<NodeView>, ApiError> {
     model::check_id(&id)?;
     let Json(input) = body.map_err(ApiError::invalid_json)?;
-    let input = input.validate()?;
+    let input = input.validate(local.is_some())?;
     let kind = input.kind.map(|kind| kind.as_str());
     let tags = input.tags.as_deref().map(model::tags_json).transpose()?;
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;

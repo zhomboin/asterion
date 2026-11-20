@@ -34,7 +34,6 @@ export function Login({ onSignIn }: { onSignIn: (session: Session) => void }) {
         <Brand />
         <div className="page-title">
           <h1>登录</h1>
-          <p className="page-scope">自托管监控与运维中心</p>
         </div>
         <form className="fields" method="post" onSubmit={submit}>
           <label>

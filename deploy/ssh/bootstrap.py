@@ -4,6 +4,8 @@ import json
 import sys
 import types
 
+if sys.version_info < (3, 9):
+    sys.exit(79)
 request = json.loads(sys.stdin.buffer.readline(524288))
 for name, source in request.pop("modules"):
     module = types.ModuleType(name)

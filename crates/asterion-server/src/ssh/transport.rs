@@ -55,17 +55,35 @@ pub(super) async fn call(
         .filter(|(name, _)| !lightweight || matches!(*name, "common" | "monitor" | "dispatch"))
         .collect();
     let mut request = json!({"modules":modules, "kind":kind, "args":args,
-        "policy":if lightweight {Value::Null} else {target.policy.clone()}, "seconds":seconds})
+        "policy":if lightweight {Value::Null} else {target.policy().clone()}, "seconds":seconds})
     .to_string()
     .into_bytes();
     if request.len() > 520000 {
         return TaskReply::failure("invalid_argument", "SSH 请求过大");
     }
     request.push(b'\n');
+    let local_command;
+    let remote = if matches!(target, Target::Direct(..)) {
+        let fallback = match kind {
+            "sample" => include_str!("../../../../deploy/ssh/sample-basic.sh"),
+            "terminal_capability" => {
+                r#"enabled=false; if test "$(id -u)" != 0; then enabled=true; fi; printf '{"outcome":"success","value":{"enabled":%s}}\n' "$enabled""#
+            }
+            _ => {
+                r#"printf '%s\n' '{"outcome":"failure","code":"unavailable","message":"此面板需要目标服务器提供 Python 3.9 或以上版本"}'"#
+            }
+        };
+        local_command = format!(
+            "if command -v python3 >/dev/null 2>&1; then {REMOTE}; status=$?; test \"$status\" = 79 || exit \"$status\"; fi\nIFS= read -r request || exit 1\n{fallback}"
+        );
+        local_command.as_str()
+    } else {
+        REMOTE
+    };
     let io = async {
         let mut child = target
             .command(false)
-            .arg(REMOTE)
+            .arg(remote)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()?;
