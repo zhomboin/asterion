@@ -1,10 +1,13 @@
 """在一次性 GitHub Ubuntu 虚拟机上，从手动账号和半解包目录完成安装并重跑。"""
 
+import grp
 import hashlib
+import io
 import json
 import os
 import pwd
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,6 +19,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "deploy/center"))
+import docker_reader
 import host
 import install
 import pki
@@ -29,12 +33,12 @@ def run(*args, **kwargs):
 def make_archive(work):
     release = work / "release"
     (release / "bin").mkdir(parents=True)
-    for name in ("asterion-server", "asterion-agent"):
+    for name in ("asterion-server", "asterion-agent", "asterion-docker-reader"):
         run("strip", "-o", release / "bin" / name, ROOT / "target/release" / name)
     (release / "web").mkdir()
     (release / "web/index.html").write_text("Asterion")
     (release / "deploy").mkdir()
-    for name in (host.SERVER, host.AGENT, "self_monitor.py"):
+    for name in (host.SERVER, host.AGENT, docker_reader.UNIT, "self_monitor.py"):
         shutil.copyfile(ROOT / "deploy" / name, release / "deploy" / name)
     unit = release / "deploy" / host.SERVER
     unit.write_text(unit.read_text().replace("/run/credentials/%n/", "%d/"))
@@ -61,6 +65,77 @@ def make_archive(work):
     shutil.copyfile(release / "web/index.html", partial / "index.html")
     (partial / "index.html").chmod(0o644)
     return archive
+
+
+def check_panel_inventory(work, port, username, password, node_id):
+    # 导入本地空镜像并创建一个停止状态的容器，避免拉取镜像或运行业务负载。
+    layer = io.BytesIO()
+    with tarfile.open(fileobj=layer, mode="w") as bundle:
+        bundle.addfile(tarfile.TarInfo("placeholder"))
+    image = (
+        run("docker", "import", "-", input=layer.getvalue(), capture_output=True)
+        .stdout.decode()
+        .strip()
+    )
+    try:
+        container = (
+            run(
+                "docker",
+                "create",
+                "--network",
+                "none",
+                image,
+                "/unused",
+                capture_output=True,
+            )
+            .stdout.decode()
+            .strip()
+        )
+        try:
+            base = f"https://127.0.0.1:{port}/api/v1"
+            curl = [
+                "curl",
+                "--noproxy",
+                "*",
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--cacert",
+                install.CONFIG / "deploy-ca.crt",
+            ]
+            cookie = work / "docker-test.cookies"
+            run(
+                *curl,
+                "-c",
+                cookie,
+                "-H",
+                "X-Asterion-CSRF: 1",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                "@-",
+                base + "/auth/login",
+                input=json.dumps({"username": username, "password": password}).encode(),
+                stdout=subprocess.DEVNULL,
+            )
+            result = run(
+                *curl,
+                "-b",
+                cookie,
+                "--retry",
+                "8",
+                "--retry-delay",
+                "1",
+                f"{base}/nodes/{node_id}/docker/containers",
+                capture_output=True,
+            )
+            data = json.loads(result.stdout)
+            assert data["status"] == "available" and data["engine_id"]
+            assert any(row["id"] == container for row in data["containers"])
+        finally:
+            run("docker", "rm", container)
+    finally:
+        run("docker", "image", "rm", image)
 
 
 def main():
@@ -117,6 +192,7 @@ def main():
 
         with (
             patch.object(install, "settings", return_value=prompt),
+            patch.object(docker_reader, "ask", return_value="2") as docker_choice,
             patch.object(host, "run", side_effect=local_commands),
             patch.object(host, "ask", return_value="admin@example.invalid") as email,
             patch.object(
@@ -128,6 +204,7 @@ def main():
         ):
             try:
                 install.provision(archive)
+                assert not services.DOCKER_CONF.exists()
                 identity = services.IDENTITY.read_bytes()
 
                 def pid(unit):
@@ -196,6 +273,44 @@ def main():
                 ca.assert_called_once()
                 password.assert_called_once()
                 email.assert_called_once()
+                run("systemctl", "start", "docker.service")
+                assert docker_reader.detect()[0] == "ready"
+                # 从实际的一键入口补配。工作目录没有归档，无需重打包或更新发布链接。
+                run(
+                    "script",
+                    "-qec",
+                    shlex.join(["bash", str(ROOT / "deploy/install-center.sh")]),
+                    "/dev/null",
+                    input=b"1\n",
+                    cwd=work.parent,
+                )
+                after = [
+                    pid(unit) for unit in (host.SERVER, host.AGENT, docker_reader.UNIT)
+                ]
+                assert after[0] == before[0] and after[1] != before[1]
+                assert services.IDENTITY.read_bytes() == identity
+                docker_gid = grp.getgrnam("docker").gr_gid
+                assert docker_gid not in os.getgrouplist(ops, account.pw_gid)
+                access = docker_reader.agent_access(
+                    grp.getgrnam(docker_reader.GROUP).gr_gid
+                )
+                assert access and docker_gid not in (
+                    access["group"],
+                    *access["extra_groups"],
+                )
+                check_panel_inventory(
+                    work,
+                    prompt["port"],
+                    ops + "-panel",
+                    password.return_value,
+                    json.loads(identity)["node_id"],
+                )
+                docker_choice.return_value = "1"
+                install.provision(archive)
+                assert docker_choice.call_args.args[-1] == "2"
+                assert [
+                    pid(unit) for unit in (host.SERVER, host.AGENT, docker_reader.UNIT)
+                ] == after
             finally:
                 subprocess.run(
                     [
@@ -203,6 +318,7 @@ def main():
                         "stop",
                         host.AGENT,
                         host.SERVER,
+                        docker_reader.UNIT,
                         "certbot.timer",
                         "nginx",
                     ],

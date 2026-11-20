@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import docker_reader
 import existing
 import host
 import pki
@@ -234,6 +235,7 @@ def provision(archive):
         print(
             f"部署完成。面板 https://{c['domain']}/login，用户名 {existing.admin_name(services.DATABASE)}。"
         )
+        docker_reader.configure(BASE, AGENT_BASE, AGENT_CONFIG)
 
 
 def main():
@@ -250,7 +252,10 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             sys.exit("另一个中心安装进程正在运行。")
-        provision(Path(sys.argv[1]))
+        if sys.argv[1] == "--docker-reader":
+            docker_reader.configure(BASE, AGENT_BASE, AGENT_CONFIG, selected=True)
+        else:
+            provision(Path(sys.argv[1]))
 
 
 if __name__ == "__main__":
@@ -265,4 +270,4 @@ if __name__ == "__main__":
         EOFError,
         KeyboardInterrupt,
     ) as exc:
-        sys.exit(f"中心安装未完成：{exc}。请核对上方出错步骤后用同一条命令重试。")
+        sys.exit(f"当前步骤未完成：{exc}。请核对上方提示后用同一条命令重试。")
