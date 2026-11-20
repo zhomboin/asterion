@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
-if (( EUID == 0 )); then
-    echo '请用普通构建账号运行。' >&2
-    exit 1
+as_root=()
+if (( EUID != 0 )); then
+    as_root=(sudo)
 fi
 mkdir -p .local
 exec 9>.local/build-release.lock
 flock 9
+"${as_root[@]}" apt-get update
+"${as_root[@]}" apt-get install -y build-essential ca-certificates curl git openssl pkg-config xz-utils
 release_id=$(git rev-parse --short=12 HEAD)
 archive="asterion-$release_id.tar.gz"
 work=$(mktemp -d "$HOME/.asterion-build.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT
-sudo apt-get update
-sudo apt-get install -y build-essential ca-certificates curl git openssl pkg-config xz-utils
 export PATH="$HOME/.cargo/bin:$PATH"
 if ! command -v rustup >/dev/null; then
     curl --proto '=https' --tlsv1.2 -fsSLo "$work/rustup-init.sh" https://sh.rustup.rs
