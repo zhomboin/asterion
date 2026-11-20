@@ -22,4 +22,6 @@ curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1
 sudo install -m 0644 "$work/api.crt" /usr/local/share/ca-certificates/asterion-ci-api.crt
 sudo install -m 0644 "$work/issuer.crt" /usr/local/share/ca-certificates/asterion-ci-issuer.crt
 sudo update-ca-certificates
-sudo --preserve-env=GITHUB_ACTIONS /usr/bin/python3 -I -B .github/workflows/check_center_install.py
+# 模拟实际安装终端，避免 Certbot 把验收当作后台任务而随机延迟续期。
+sudo --preserve-env=GITHUB_ACTIONS script -qec \
+    '/usr/bin/python3 -I -B .github/workflows/check_center_install.py' /dev/null
