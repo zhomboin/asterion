@@ -3,6 +3,7 @@ use tokio::process::Command;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Direct {
+    pub(super) auth: super::auth::Auth,
     host: String,
     user: Option<String>,
     port: Option<u16>,
@@ -45,6 +46,7 @@ impl Direct {
             Some(digits.parse::<u16>().ok().filter(|p| *p > 0)?)
         };
         Some(Self {
+            auth: super::auth::Auth::Default,
             host: host.to_owned(),
             user,
             port,

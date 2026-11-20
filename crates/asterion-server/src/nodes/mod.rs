@@ -5,6 +5,7 @@ mod credentials;
 mod error;
 mod hosts;
 mod model;
+mod ssh_auth;
 
 use axum::{Router, routing::get};
 use sqlx::SqlitePool;
