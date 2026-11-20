@@ -4,6 +4,7 @@ set -euo pipefail
 deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
     echo '用法：bash deploy/install-center.sh [可信的 asterion-<构建编号>.tar.gz]'
+    echo '已有中心可选择仅补配 Docker 只读采集，直接复用已安装的发布。'
     echo '以 root 或有 sudo 权限的普通用户运行。省略归档时先查找当前目录和家目录，找不到就从源码构建。'
     exit 0
 fi
@@ -19,6 +20,26 @@ os_release=$(. /etc/os-release && echo "$ID:$VERSION_ID")
 if [[ $os_release != ubuntu:22.04 && $os_release != ubuntu:24.04 ]] || [[ ! -d /run/systemd/system ]]; then
     echo '中心安装需要使用 systemd 的 Ubuntu 22.04 或 24.04。' >&2
     exit 1
+fi
+
+installer=(/usr/bin/python3 -I -B "$deploy_dir/center/install.py")
+if (( EUID != 0 )); then
+    installer=(sudo -- "${installer[@]}")
+fi
+if [[ -L /opt/asterion/current ]]; then
+    echo '检测到已有中心发布。'
+    echo '1) 仅配置本机 Docker 只读采集（自动检测，权限变更时重启本机 Agent）'
+    echo '2) 继续完整中心部署'
+    echo '3) 退出，保留当前配置'
+    while read -r -p '请选择 [3]：' action; do
+        case ${action:-3} in
+            1) exec "${installer[@]}" --docker-reader ;;
+            2) break ;;
+            3) exit 0 ;;
+            *) echo '请输入 1、2 或 3。' ;;
+        esac
+    done
+    [[ ${action:-} == 2 ]] || exit 1
 fi
 
 if (( $# )); then
@@ -54,7 +75,4 @@ else
     esac
 fi
 printf '使用发布包 %s\n' "$archive"
-if (( EUID == 0 )); then
-    exec /usr/bin/python3 -I -B "$deploy_dir/center/install.py" "$archive"
-fi
-exec sudo -- /usr/bin/python3 -I -B "$deploy_dir/center/install.py" "$archive"
+exec "${installer[@]}" "$archive"

@@ -19,6 +19,7 @@ FIRST_ADMIN = Path("/run/asterion-first-admin")
 ENROLL = Path("/run/asterion-self-enrollment")
 ADMIN_CONF = RUNTIME / (SERVER + ".d/10-bootstrap.conf")
 ENROLL_CONF = RUNTIME / (AGENT + ".d/10-self-enroll.conf")
+DOCKER_CONF = UNITS / (AGENT + ".d/30-docker-read.conf")
 
 
 def active(unit):
@@ -43,52 +44,45 @@ def ensure_running(unit, restart=False):
         print(f"复用运行中的 {unit}。")
 
 
+def property_value(unit, name):
+    return run(
+        "systemctl", "show", "--value", "-p", name, unit, stdout=subprocess.PIPE
+    ).stdout.strip()
+
+
+def check_unit(unit, source, known):
+    unit_path = UNITS / unit
+    unit_file(unit_path, source.read_text(), inspect_only=True)
+    fragment = property_value(unit, "FragmentPath")
+    if fragment and Path(fragment) != unit_path:
+        raise ValueError(f"{unit} 已由其他服务文件提供：{fragment}")
+    overrides = set(map(Path, property_value(unit, "DropInPaths").split()))
+    for base in (UNITS, RUNTIME):
+        directory = base / (unit + ".d")
+        if trusted(directory, directory=True):
+            overrides.update(directory.glob("*.conf"))
+    for item in overrides:
+        if item not in known:
+            raise ValueError(f"已有自定义 systemd 配置，无法确认是否为标准服务：{item}")
+        if trusted(item):
+            unit_file(item, known[item], inspect_only=True)
+
+
+def agent_overrides():
+    return {
+        ENROLL_CONF: template("enroll.conf"),
+        UNITS / (AGENT + ".d/20-local.conf"): template("agent-local.conf"),
+        DOCKER_CONF: template("docker-read.conf"),
+    }
+
+
 def check_units(c, stage):
-    for unit, known in (
-        (SERVER, [ADMIN_CONF]),
-        (AGENT, [ENROLL_CONF, UNITS / (AGENT + ".d/20-local.conf")]),
-    ):
-        unit_path = UNITS / unit
-        unit_file(unit_path, (stage / "deploy" / unit).read_text(), inspect_only=True)
-        fragment = run(
-            "systemctl",
-            "show",
-            "--value",
-            "-p",
-            "FragmentPath",
-            unit,
-            stdout=subprocess.PIPE,
-        ).stdout.strip()
-        if fragment and Path(fragment) != unit_path:
-            raise ValueError(f"{unit} 已由其他服务文件提供：{fragment}")
-        overrides = run(
-            "systemctl",
-            "show",
-            "--value",
-            "-p",
-            "DropInPaths",
-            unit,
-            stdout=subprocess.PIPE,
-        ).stdout.split()
-        for base in (UNITS, RUNTIME):
-            directory = base / (unit + ".d")
-            if trusted(directory, directory=True):
-                overrides.extend(directory.glob("*.conf"))
-        for item in map(Path, overrides):
-            if item not in known:
-                raise ValueError(
-                    f"已有自定义 systemd 配置，无法确认是否为标准中心服务：{item}"
-                )
-        for item in known:
-            if trusted(item):
-                expected = (
-                    template("admin.conf", ops=c["ops"])
-                    if item == ADMIN_CONF
-                    else template(
-                        "enroll.conf" if item == ENROLL_CONF else "agent-local.conf"
-                    )
-                )
-                unit_file(item, expected, inspect_only=True)
+    check_unit(
+        SERVER,
+        stage / "deploy" / SERVER,
+        {ADMIN_CONF: template("admin.conf", ops=c["ops"])},
+    )
+    check_unit(AGENT, stage / "deploy" / AGENT, agent_overrides())
     trusted(FIRST_ADMIN, private=True)
     trusted(ENROLL, directory=True, private=True)
     trusted(ENROLL / "token", private=True)

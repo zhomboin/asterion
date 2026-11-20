@@ -34,7 +34,7 @@
 
 ## Docker
 
-默认关闭 Docker 读取。需要监控时先配置独立的 Unix Socket 读取服务，再给 Agent 设置 `ASTERION_DOCKER_READER_SOCKET`。读取服务所在账号需要 Engine Socket 权限。面板展示独立 Docker Engine、Docker Desktop 或未知类型。中心按观测节点记录 Engine ID 和端点指纹，空容器列表也会保存 Engine 身份。容器日志仅取有限条数和字节，按常见敏感文本规则尽力脱敏。Docker 环境变量值默认不采集。
+Docker 读取按节点启用。中心主机重跑[一键部署脚本](deployment.md#一键初始化中心)并选择「仅配置本机 Docker 只读采集」即可。其余 Agent 按部署指南配置独立读取服务和 `ASTERION_DOCKER_READER_SOCKET`。只有读取服务需要访问 Engine Socket，Agent 通过读取组查询容器。面板展示独立 Docker Engine、Docker Desktop 或未知类型。在「Docker → 添加监控」查看可纳管的容器。中心按观测节点记录 Engine ID 和端点指纹，空容器列表也会保存 Engine 身份。容器日志仅取有限条数和字节，按常见敏感文本规则尽力脱敏。Docker 环境变量值默认不采集。
 
 Docker 变更使用独立的操作 Socket。其策略同时限定 Engine ID、完整容器 ID 和支持的动作。两个 Socket 的访问组应分别配置。安装步骤见[远程部署](deployment.md#8-启用可选能力)。
 

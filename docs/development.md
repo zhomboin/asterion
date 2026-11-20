@@ -198,7 +198,7 @@ cargo +stable run --locked -p asterion-agent
 
 ## 6. 检查改动
 
-修改中心安装器时，在 WSL 工作区运行以下定向检查。本地测试使用临时目录和模拟系统命令。GitHub CI 会在 Ubuntu 22.04 和 24.04 上以 root 从源码构建发布包并进入安装向导，同时验证手动部署续装、面板鉴权和代理登录限速。公网 ACME 签发需在域名所属环境验收。实际服务器安装见[一键初始化中心](deployment.md#一键初始化中心)。
+修改中心安装器时，在 WSL 工作区运行以下定向检查。本地测试使用临时目录和模拟系统命令，覆盖 Docker 检测、跳过、权限冲突及中断后重跑。GitHub CI 在 Ubuntu 22.04 和 24.04 上验证 root 从源码构建、手动部署续装、面板鉴权和代理登录限速，并通过已部署中心的 Docker 选项补齐权限，从面板 API 读取实际测试容器。公网 ACME 签发需在域名所属环境验收。实际服务器安装见[一键初始化中心](deployment.md#一键初始化中心)。
 
 ```bash
 bash -n deploy/install-center.sh
