@@ -2,14 +2,12 @@
 
 import base64
 from contextlib import ExitStack
-import http.cookiejar
 import json
 import os
 from pathlib import Path
 import pwd
 import secrets
 import socket
-import ssl
 import subprocess
 import tempfile
 import time
@@ -113,41 +111,17 @@ DisableForwarding yes
             {"good": target, "wrong": {**target, "known_hosts_file": "wrong_hosts"}}
         )
     )
-    subprocess.run(
-        [
-            "openssl",
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-days",
-            "1",
-            "-subj",
-            "/CN=localhost",
-            "-addext",
-            "subjectAltName=IP:127.0.0.1",
-            "-keyout",
-            work / "tls.key",
-            "-out",
-            work / "tls.crt",
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
     panel_port = port()
     password = secrets.token_hex(16)
     (work / "password").write_text(password)
     (work / "password").chmod(0o600)
     env = {
         **os.environ,
+        "ASTERION_LOCAL": "1",
         "ASTERION_LISTEN_ADDR": f"127.0.0.1:{panel_port}",
         "ASTERION_ADMIN_USERNAME": "fixture",
         "ASTERION_ADMIN_PASSWORD_FILE": str(work / "password"),
         "ASTERION_DATABASE_URL": "sqlite://" + str(work / "db"),
-        "ASTERION_TLS_CERT_FILE": str(work / "tls.crt"),
-        "ASTERION_TLS_KEY_FILE": str(work / "tls.key"),
         "ASTERION_SAMPLE_INTERVAL_SECS": "5",
         "ASTERION_TERMINAL_ENABLED": "1",
         "ASTERION_SSH_CONFIG_FILE": str(work / "profiles.json"),
@@ -158,21 +132,22 @@ DisableForwarding yes
         work / "center.log",
         env,
     )
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),
-        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
-        urllib.request.HTTPSHandler(
-            context=ssl.create_default_context(cafile=work / "tls.crt")
-        ),
-    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def api(path, data=None):
         req = urllib.request.Request(
-            f"https://127.0.0.1:{panel_port}" + path,
+            f"http://127.0.0.1:{panel_port}" + path,
             data=json.dumps(data).encode() if data is not None else None,
             headers={"X-Asterion-CSRF": "1", "Content-Type": "application/json"},
         )
         with opener.open(req, timeout=12) as reply:
+            if path == "/api/v1/auth/login":
+                opener.addheaders = [
+                    (
+                        "X-Asterion-Local-Session",
+                        reply.headers["X-Asterion-Local-Session"],
+                    )
+                ]
             content = reply.read()
             return json.loads(content) if content else None
 
@@ -196,11 +171,11 @@ DisableForwarding yes
 
     node, wrong = create("good"), create("wrong")
     try:
-        create("ssh://fixture")
+        create("ssh://-invalid")
     except urllib.error.HTTPError as error:
         assert error.code == 400
     else:
-        raise AssertionError("常驻模式接受了本机 SSH 地址")
+        raise AssertionError("面板接受了无效 SSH 地址")
     wait(lambda: api(wrong)["status"] == "offline", "主机密钥不匹配必须离线")
     try:
         wait(lambda: api(node)["status"] == "online", "正常 SSH 节点应上线")

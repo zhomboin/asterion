@@ -80,12 +80,11 @@ Host !minimal *
         "ASTERION_LOCAL_SSH_CONFIG": str(config),
         "ASTERION_SSH_CONFIG_FILE": str(work / "direct-profiles.json"),
     }
-    for key in (
-        "ASTERION_TLS_CERT_FILE",
-        "ASTERION_TLS_KEY_FILE",
-    ):
-        env.pop(key, None)
     binary = os.environ.get("TEST_CENTER", "target/debug/asterion-server")
+    unmanaged = env.copy()
+    del unmanaged["ASTERION_LOCAL"]
+    denied = subprocess.run([binary], env=unmanaged, capture_output=True, timeout=10)
+    assert denied.returncode and b"start.sh" in denied.stderr
     denied = subprocess.run(
         [binary],
         env={**env, "ASTERION_LISTEN_ADDR": "0.0.0.0:0"},

@@ -2,13 +2,12 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use asterion_server::{
     alerts, app, auth, config::Config, database, monitor, operations, service_monitors,
     ssh_bus::SshBus, trends,
 };
 use axum_server::Handle;
-use axum_server::tls_rustls::{RustlsConfig, from_tcp_rustls};
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
@@ -20,24 +19,12 @@ async fn main() -> Result<()> {
         .init();
 
     let config = Config::from_env()?;
-    let tls = if let Some((cert, key)) = &config.tls {
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .map_err(|_| anyhow!("无法初始化 TLS 加密后端"))?;
-        Some(
-            RustlsConfig::from_pem_file(cert, key)
-                .await
-                .context("无法加载中心服务的 TLS 证书或私钥")?,
-        )
-    } else {
-        None
-    };
     let listener = TcpListener::bind(config.listen_addr).context("无法绑定中心服务监听地址")?;
     listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
 
     let (pool, database_guard) = database::connect_center(&config.database_url).await?;
-    if config.tls.is_none() && config.admin_password_file.is_none() {
+    if config.admin_password_file.is_none() {
         auth::bootstrap_local_admin(&pool).await?;
     } else {
         auth::bootstrap_admin(
@@ -75,7 +62,6 @@ async fn main() -> Result<()> {
         pool.clone(),
         Arc::clone(&bus),
         shutdown.clone(),
-        tls.is_none(),
     ));
     let app = app::router(pool.clone(), config.web_dir.as_deref(), shutdown, bus);
     let handle = Handle::new();
@@ -86,21 +72,13 @@ async fn main() -> Result<()> {
         shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
     });
 
-    let result = if let Some(tls) = tls {
-        tracing::info!(%address, "中心 HTTPS 服务已启动");
-        from_tcp_rustls(listener, tls)?
-            .handle(handle)
-            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-    } else {
-        println!("本地面板 http://{address} （Ctrl+C 退出）");
-        let app = asterion_server::local::router(app, address);
-        axum_server::from_tcp(listener)?
-            .handle(handle)
-            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-    }
-    .context("面板运行失败");
+    println!("本地面板 http://{address} （Ctrl+C 退出）");
+    let app = asterion_server::local::router(app, address);
+    let result = axum_server::from_tcp(listener)?
+        .handle(handle)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .context("面板运行失败");
     signal.abort();
     maintenance.abort();
     service_checks.abort();

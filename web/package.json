@@ -7,7 +7,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "bash ../start.sh",
     "check": "tsc --noEmit",
     "test": "node --test",
     "build": "vite build"

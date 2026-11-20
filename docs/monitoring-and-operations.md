@@ -1,27 +1,17 @@
 # SSH 连接与监控
 
-从本机启动时，接入页可直接输入 SSH 地址或 OpenSSH 别名。私钥、主机记录和已解锁的 SSH agent 均来自运行面板的 Linux 用户。基础监控及终端的使用步骤见[本机使用](local.md)。以下为指定连接策略和常驻中心的配置方式。
+## 直接连接服务器
 
-中心从 `ASTERION_SSH_CONFIG_FILE` 指定的 UTF-8 JSON 文件读取连接名。每个连接至少包含目标地址和 SSH 用户，端口默认为 22。面板只列出连接名，私钥由中心的 OpenSSH 客户端读取。以下是单节点的最小本地配置。
+面板使用启动它的 Linux 用户的 OpenSSH 客户端。先在同一终端确认密钥登录和主机指纹，再将同一地址或 SSH 别名填入「节点 → 接入服务器」。此方式复用 `~/.ssh/config`、已核实的主机记录和当前 SSH agent 中的密钥。[启动和接入步骤](local.md)
 
-```json
-{
-  "app": {
-    "host": "<目标地址>",
-    "user": "<已有SSH用户>",
-    "port": 22
-  }
-}
-```
+## 连接配置和专用操作
 
-默认从配置所在目录读取 `ssh.key` 和 `known_hosts`。各连接也可设置 `identity_file` 和 `known_hosts_file`，路径相对于配置文件或为绝对路径。systemd 部署时，额外私钥可通过独立的 `LoadCredential` 条目提供，并在连接中引用其凭据名。中心严格核对目标主机密钥，使用非交互公钥认证。以下命令可在中心以能读取相应凭据的身份验证。
+要为已经接入的节点设置可操作的软件包、容器或命令，在本机数据目录的 `profiles.json` 里使用节点详情显示的完整连接标识（例如 `ssh://app`）作为键。条目包含一个 `policy` 对象。保存后面板自动加载，继续使用同一 SSH 身份和节点历史。[专用面板配置](managed-operations.md)
 
-```bash
-ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='<已核实的主机记录文件>' -i '<私钥>' -p '<端口>' -l '<SSH用户>' -- '<目标地址>' 'python3 --version'
-```
+也可以在该文件中定义命名连接，指定 `host`、`user` 和可选的 `port`（默认 22），然后在接入页的下拉框中选择。命名连接默认从配置文件所在目录读取 `ssh.key` 和 `known_hosts`，可通过 `identity_file` 和 `known_hosts_file` 指定路径。样例中的占位符应替换为自己核实的值，实际配置留在本机数据目录。[命名连接样例](../deploy/ssh.example.json)
 
-节点需要 Linux、可读的 `/proc` 和 Python 3.9 或以上版本。每次采集由 SSH 会话启动一次短时读取。默认每 15 秒采集 CPU、内存、交换区、磁盘和网卡数据，保留原始数据 7 天、趋势 90 天。中心配置支持 `ASTERION_SAMPLE_INTERVAL_SECS`、`ASTERION_METRIC_RETENTION_DAYS` 和 `ASTERION_TREND_RETENTION_DAYS`。连接校验失败或采集超时会显示离线，节点详情保留原因和上次成功时间。
+## 采样和权限
 
-进程、Docker 和 systemd 页按需查询。Docker 读取使用远端 Unix Socket，操作使用远端 Docker CLI；systemd 使用远端 systemctl。目标账号已有权限决定可读、可执行的范围。持续服务检查、告警和历史数据由中心保存。
+直连 Linux 节点需要可读的 `/proc` 和常用系统命令。基础采样包括 CPU、内存、根分区和网卡累计流量。完整采样、命名连接的监控和专用资源查询需要 Python 3.9 或以上版本。Docker、systemd 和进程信息按需读取，实际范围由所选 SSH 账号的权限决定。
 
-[专用操作配置](managed-operations.md) · [本地开发](development.md) · [部署](deployment.md)
+面板默认每 15 秒采样，原始数据保留 7 天，趋势保留 90 天。可在启动时分别设置 `ASTERION_SAMPLE_INTERVAL_SECS`、`ASTERION_METRIC_RETENTION_DAYS` 和 `ASTERION_TREND_RETENTION_DAYS`。采样、告警和持续服务检查随本机程序运行，历史记录存放在本机数据目录。连接失败时可在节点详情查看原因和上次成功时间。
