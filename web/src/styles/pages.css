@@ -137,7 +137,16 @@
   .trend svg { height: clamp(7.2rem, 35vw, 8.5rem); }
 }
 .node-configuration.stage-card {
-  width: 100%;
+  width: min(100%, 34rem);
+  padding: clamp(1rem, 3vw, 1.5rem);
   grid-template-columns: minmax(0, 1fr);
 }
 .node-configuration .fields { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.node-fields { display: grid; min-width: 0; margin: 0; padding: 0; border: 0; gap: var(--space-3); }
+.node-address, .node-auth { display: grid; gap: var(--space-3); align-items: start; }
+.node-address { grid-template-columns: minmax(0, 1fr) clamp(5.5rem, 24%, 7rem); }
+.node-auth { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.node-fields label, .node-fields input, .node-fields select { min-width: 0; }
+.node-extra summary { cursor: pointer; color: var(--ink-2); font-size: var(--text-sm); }
+.node-extra[open] summary { margin-block-end: var(--space-3); }
+@media (max-width: 26rem) { .node-auth { grid-template-columns: minmax(0, 1fr); } }

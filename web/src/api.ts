@@ -5,7 +5,6 @@ export interface Session {
 export interface NodeDraft {
   name: string;
   kind: 'linux' | 'wsl';
-  tags: string[];
   notes: string;
   host_name?: string | null;
 }
@@ -53,6 +52,7 @@ type RequestOptions = {
   body?: unknown;
   signal?: AbortSignal;
   keepalive?: boolean;
+  timeoutMs?: number;
 };
 
 export function request<T>(path: string, options?: RequestOptions & { response?: 'json' }): Promise<T>;
@@ -62,7 +62,7 @@ export async function request<T>(
   options: RequestOptions & { response?: 'json' | 'empty' } = {},
 ): Promise<T | void> {
   const { method = 'GET', body, signal, keepalive } = options;
-  const timeout = AbortSignal.timeout(12_000);
+  const timeout = AbortSignal.timeout(options?.timeoutMs ?? 12_000);
   const headers = new Headers({ Accept: 'application/json' });
   const localSession = globalThis.location?.protocol === 'http:' ? globalThis.sessionStorage : undefined;
   const sessionHeader = 'X-Asterion-Local-Session';

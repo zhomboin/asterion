@@ -94,7 +94,8 @@ async fn node_management_requires_a_session_and_preserves_partial_updates() {
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
     let session = admin_cookie(&pool, &router).await;
     let cookie = Some(session.as_str());
-    let node = json!({"ssh_profile":"fixture","name": "工作节点", "kind": "wsl", "tags": ["测试"], "notes": "测试节点"});
+    let node =
+        json!({"ssh_profile":"fixture","name": "工作节点", "kind": "wsl", "notes": "测试节点"});
 
     let path = "/api/v1/nodes";
     let csrf_rejected = request(&router, "POST", path, cookie, false, node.clone()).await;
@@ -124,7 +125,7 @@ async fn node_management_requires_a_session_and_preserves_partial_updates() {
     .await;
     assert_eq!(patched["name"], "工作节点");
     assert_eq!(patched["kind"], "wsl");
-    assert_eq!(patched["tags"], json!(["测试"]));
+    assert!(patched.get("tags").is_none());
     assert_eq!(patched["notes"], "修改后的备注");
     assert_eq!(patched["status"], "pending");
     assert!(patched.get("token").is_none());
@@ -167,7 +168,7 @@ async fn node_management_requires_a_session_and_preserves_partial_updates() {
 }
 
 #[tokio::test]
-async fn list_combines_name_tag_and_status_before_pagination() {
+async fn list_combines_name_and_status_before_pagination() {
     let pool = database::connect("sqlite::memory:").await.unwrap();
     let (_shutdown_sender, shutdown_receiver) = watch::channel(false);
     let router = app::router(
@@ -180,10 +181,10 @@ async fn list_combines_name_tag_and_status_before_pagination() {
     let cookie = Some(session.as_str());
 
     sqlx::query(
-        "INSERT INTO nodes (id, name, kind, tags, last_seen_at, created_at) VALUES
-         ('dev-1', 'Development old', 'linux', '[\"Blue\"]', 1, 1),
-         ('dev-2', 'Development next', 'linux', '[\"Blue\"]', NULL, 2),
-         ('dev-3', 'Development later', 'linux', '[\"Green\"]', NULL, 3)",
+        "INSERT INTO nodes (id, name, kind, last_seen_at, created_at) VALUES
+         ('dev-1', 'Development old', 'linux', 1, 1),
+         ('dev-2', 'Development next', 'linux', NULL, 2),
+         ('dev-3', 'Production', 'linux', NULL, 3)",
     )
     .execute(&pool)
     .await
@@ -198,7 +199,7 @@ async fn list_combines_name_tag_and_status_before_pagination() {
         request(
             &router,
             "GET",
-            "/api/v1/nodes?limit=1&q=DEVELOPMENT&tag=Blue&status=pending",
+            "/api/v1/nodes?limit=1&q=DEVELOPMENT&status=pending",
             cookie,
             false,
             Value::Null,

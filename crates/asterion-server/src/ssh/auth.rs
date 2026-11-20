@@ -7,7 +7,7 @@ use tokio::process::Command;
 
 const ASKPASS_REVISION: &str = "ASTERION_ASKPASS_REVISION";
 const ASKPASS_DB: &str = "ASTERION_ASKPASS_DB";
-const ASKPASS_OWNER: &str = "ASTERION_ASKPASS_OWNER";
+pub(super) const ASKPASS_OWNER: &str = "ASTERION_ASKPASS_OWNER";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) enum Auth {
@@ -121,8 +121,7 @@ pub(super) async fn pause_password(
     tx.commit().await
 }
 
-#[tokio::main(flavor = "current_thread")]
-pub async fn askpass() -> Result<()> {
+pub(super) fn verify_askpass_owner() -> Result<()> {
     // 跳板机启动的第二个 ssh 也可能继承助手环境，只允许面板直接启动的客户端取密码。
     let ssh_pid = unsafe { libc::getppid() };
     let status = std::fs::read_to_string(format!("/proc/{ssh_pid}/status"))?;
@@ -133,8 +132,14 @@ pub async fn askpass() -> Result<()> {
             .find_map(|line| line.strip_prefix("PPid:"))
             .map(str::trim)
             == Some(owner.as_str()),
-        "SSH 密码请求来源无效"
+        "SSH 请求来源无效"
     );
+    Ok(())
+}
+
+#[tokio::main(flavor = "current_thread")]
+pub async fn askpass() -> Result<()> {
+    verify_askpass_owner()?;
     let prompt = std::env::args_os().nth(1).unwrap_or_default();
     ensure!(
         prompt.to_string_lossy().trim_end().ends_with("password:")

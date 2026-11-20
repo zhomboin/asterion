@@ -120,17 +120,23 @@ impl Target {
         }
     }
     pub(super) fn command(&self, pty: bool) -> Command {
-        let mut command = Command::new("/usr/bin/ssh");
-        command.env_clear();
+        let mut command = Self::client();
         if let Self::Direct(direct, _) = self {
             direct.auth.configure(&mut command);
         }
+        command.args(["-oBatchMode=yes", "-oStrictHostKeyChecking=yes"]);
+        self.destination_command(command, pty)
+    }
+    pub(super) fn client() -> Command {
+        let mut command = Command::new("/usr/bin/ssh");
+        command.env_clear();
+        command
+    }
+    pub(super) fn destination_command(&self, mut command: Command, pty: bool) -> Command {
         command
             .env("PATH", "/usr/bin:/bin")
             .env("TERM", "xterm-256color")
             .args([
-                "-oBatchMode=yes",
-                "-oStrictHostKeyChecking=yes",
                 "-oUpdateHostKeys=no",
                 "-oConnectTimeout=5",
                 "-oServerAliveInterval=5",

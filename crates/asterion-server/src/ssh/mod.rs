@@ -2,6 +2,7 @@ mod auth;
 pub use auth::{askpass, is_askpass};
 mod config;
 mod direct;
+pub mod host_key;
 mod pty;
 mod transport;
 
