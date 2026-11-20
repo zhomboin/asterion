@@ -102,6 +102,8 @@ def verify_managed(root, run, curl, cookie, api, container):
                 for unit in [host.AGENT, *units]
             ] == pids
             # 实际验证配置目录可写且指定 Unit 生效，测试不重启业务服务。
+            run("systemctl", "start", sample_unit)
+            before = services.property_value(sample_unit, "InvocationID")
             content = '{"workers":3}\n'
             response = docker_probe.query(
                 "/run/asterion-managed-configs/requests.sock",
@@ -118,6 +120,7 @@ def verify_managed(root, run, curl, cookie, api, container):
             )
             assert response["result"]["exit_code"] == 0 and path.read_text() == content
             assert services.active(sample_unit)
+            assert services.property_value(sample_unit, "InvocationID") != before
         finally:
             run("systemctl", "stop", sample_unit)
             fragment.unlink()

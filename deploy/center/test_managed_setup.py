@@ -36,7 +36,7 @@ class ManagedSetupTests(unittest.TestCase):
                 setup,
                 "prepare",
                 return_value=setup.Instance(
-                    "configs", self.root, "unit", self.root, "", {}
+                    "configs", self.root, "unit", self.root, "", {}, {}
                 ),
             ),
             patch.object(host, "run") as run,
@@ -54,9 +54,15 @@ class ManagedSetupTests(unittest.TestCase):
         }
         host.put(path, json.dumps(original))
         with self.assertRaisesRegex(ValueError, "其他授权"):
-            setup.executor_policy(path, ["configs"], drop)
+            setup.executor_policy(path, ["configs"], drop, setup.read_policy(path))
         host.put(drop, host.template("operations.conf"))
-        new = setup.executor_policy(path, ["configs"], drop)
+        with (
+            patch.object(setup, "live_credential", return_value=None),
+            self.assertRaisesRegex(ValueError, "其他授权"),
+        ):
+            setup.executor_policy(path, ["configs"], drop, original)
+        with patch.object(setup, "live_credential", return_value=path.read_bytes()):
+            new = setup.executor_policy(path, ["configs"], drop, original)
         self.assertEqual(new["systemd_units"], original["systemd_units"])
         self.assertEqual(
             new["managed"],
@@ -68,7 +74,7 @@ class ManagedSetupTests(unittest.TestCase):
         self.assertEqual(inode, path.stat().st_ino)
         path.write_text('{"managed":{"configs":"/custom"}}')
         with self.assertRaisesRegex(ValueError, "其他操作端点"):
-            setup.executor_policy(path, ["configs"], drop)
+            setup.executor_policy(path, ["configs"], drop, setup.read_policy(path))
         path.write_text('{"managed":{},"managed":{}}')
         with self.assertRaisesRegex(ValueError, "重复键"):
             setup.read_policy(path)
@@ -82,6 +88,31 @@ class ManagedSetupTests(unittest.TestCase):
             self.assertEqual(services.agent_overrides()[path], group)
             path.write_text(group + "SupplementaryGroups=docker\n")
             self.assertNotIn(path, services.agent_overrides())
+
+    def test_interactive_run_preserves_a_concurrent_policy_edit(self):
+        source = self.root / "executor.json"
+        plan = setup.Instance(
+            "configs", self.root / "catalog", "unit", self.root / "override", "", {}, {}
+        )
+
+        def choose(*_):
+            if not source.exists():
+                host.put(source, "{}")
+            else:
+                source.write_text('{"commands":[]}')
+            return "1"
+
+        with (
+            patch.object(targets, "choice", side_effect=choose),
+            patch.object(setup.docker_reader, "installed_release"),
+            patch.object(setup, "check_release"),
+            patch.object(setup, "prepare", return_value=plan),
+            patch.object(host, "unit_file") as unit,
+            self.assertRaisesRegex(ValueError, "其他进程修改"),
+        ):
+            setup.configure(self.root, self.root, self.root)
+        unit.assert_not_called()
+        self.assertEqual(setup.read_policy(source), {"commands": []})
 
     def test_json_fields_and_text_choices(self):
         with patch(

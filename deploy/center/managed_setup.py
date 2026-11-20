@@ -28,6 +28,7 @@ class Instance:
     override: Path
     permissions: str
     catalog: dict
+    previous: dict
 
 
 def json_object(pairs):
@@ -70,15 +71,19 @@ def credential(unit, name):
     return f"/run/credentials/{unit}/{name}"
 
 
-def loaded(unit, name, source):
+def live_credential(unit, name):
     pid = services.property_value(unit, "MainPID")
     if not pid.isdecimal() or int(pid) == 0:
-        return False
+        return None
     path = Path("/proc") / pid / "root" / credential(unit, name).lstrip("/")
     try:
-        return path.read_bytes() == source.read_bytes()
+        return path.read_bytes()
     except (FileNotFoundError, ProcessLookupError):
-        return False
+        return None
+
+
+def loaded(unit, name, source):
+    return live_credential(unit, name) == source.read_bytes()
 
 
 def confirmed_catalog(kind, previous):
@@ -142,6 +147,13 @@ def group_id(kind, *, create=False):
         group = grp.getgrnam(name)
     if not group.gr_gid or grp.getgrgid(group.gr_gid).gr_name != name:
         raise ValueError(f"{name} 与现有系统组冲突")
+    for privileged in ("docker", "sudo"):
+        try:
+            other = grp.getgrnam(privileged)
+        except KeyError:
+            continue
+        if group.gr_gid == other.gr_gid:
+            raise ValueError(f"{name} 不能复用 {privileged} 的组编号")
     return group.gr_gid
 
 
@@ -151,7 +163,17 @@ def prepare(kind, config, source):
     override = host.UNITS / (unit + ".d/override.conf")
     existing.trusted(override.parent, directory=True)
     group_id(kind)
-    catalog = confirmed_catalog(kind, read_policy(path))
+    original = read_policy(path)
+    catalog = confirmed_catalog(kind, original)
+    terminals = {
+        key: spec
+        for key, spec in catalog.items()
+        if kind == "containers" and spec.get("terminal") is True
+    }
+    if terminals:
+        live_catalog = json.loads(live_credential(unit, "policy.json") or b"{}")
+        if any(live_catalog.get(key) != spec for key, spec in terminals.items()):
+            raise ValueError("已有策略包含尚未生效的容器终端授权，请先核对独立终端配置")
     for key, spec in catalog.items():
         if kind == "configs":
             if not (
@@ -170,18 +192,30 @@ def prepare(kind, config, source):
             raise ValueError(f"容器目标 {key} 缺少有效的名称或 Engine ID")
     previous, desired = service_override(kind, catalog, override)
     services.check_unit(unit, source, {override: previous}, template_unit=TEMPLATE)
-    return Instance(kind, path, unit, override, desired, catalog)
+    return Instance(kind, path, unit, override, desired, catalog, original)
 
 
-def executor_policy(path, kinds, drop):
-    policy = read_policy(path)
+def executor_policy(path, kinds, drop, current):
+    policy = current.copy()
     managed = policy.get("managed", {})
     if not isinstance(managed, dict):
         raise TypeError(f"请核对 {path} 中的 managed 策略")
-    if not existing.trusted(drop) and (
-        set(policy) - {"managed"} or set(managed) - set(kinds)
-    ):
-        raise ValueError(f"{path} 有尚未启用的其他授权，请先核对原策略")
+    if set(policy) - {"managed"} or set(managed) - set(kinds):
+        active = (
+            live_credential(host.AGENT, EXECUTOR) if existing.trusted(drop) else None
+        )
+        live = json.loads(active) if active else {}
+        if any(
+            key not in live or live[key] != value
+            for key, value in policy.items()
+            if key != "managed"
+        ) or any(
+            live.get("managed", {}).get(key) != value
+            for key, value in managed.items()
+            if key not in kinds
+        ):
+            raise ValueError(f"{path} 有尚未启用的其他授权，请先核对原策略")
+    managed = managed.copy()
     for kind in kinds:
         socket = socket_name(kind)
         if managed.get(kind, socket) != socket:
@@ -239,7 +273,8 @@ def configure(base, agent_base, config):
     value = credential(host.AGENT, EXECUTOR)
     if existing.env_values(config / "agent.env").get(VARIABLE, value) != value:
         raise ValueError("Agent 已配置其他操作策略，请先核对 agent.env")
-    executor = executor_policy(path, kinds, drop)
+    initial_executor = read_policy(path)
+    executor = executor_policy(path, kinds, drop, initial_executor)
     encoded(executor)
     plans = [prepare(kind, config, source) for kind in kinds]
     for plan in plans:
@@ -259,6 +294,10 @@ def configure(base, agent_base, config):
         == "0"
     ):
         return
+    if read_policy(path) != initial_executor or any(
+        read_policy(plan.path) != plan.previous for plan in plans
+    ):
+        raise ValueError("填写向导期间节点策略已被其他进程修改，请重新运行核对")
     host.unit_file(host.UNITS / TEMPLATE, source.read_text())
     groups = []
     for plan in plans:
@@ -279,6 +318,9 @@ def configure(base, agent_base, config):
     host.run("systemctl", "daemon-reload")
     host.run("systemd-analyze", "verify", host.AGENT, *(plan.unit for plan in plans))
     for plan in plans:
+        services.check_unit(
+            plan.unit, source, {plan.override: plan.permissions}, template_unit=TEMPLATE
+        )
         pending = config / f"managed-{plan.kind}.restart-pending"
         services.ensure_running(
             plan.unit,
