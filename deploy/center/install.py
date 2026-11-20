@@ -108,7 +108,8 @@ def agent_config(c):
 
 def install_release(c, stage):
     releases = BASE / "releases"
-    releases.mkdir(parents=True, exist_ok=True)
+    BASE.mkdir(mode=0o755, exist_ok=True)
+    releases.mkdir(mode=0o755, exist_ok=True)
     release = releases / c["revision"]
     if release.exists():
         existing.reconcile_release(stage, release, c["sha256"], put)
@@ -119,7 +120,7 @@ def install_release(c, stage):
             shutil.copytree(stage, dest)
             put(dest / ".sha256", c["sha256"] + "\n")
             dest.rename(release)
-    AGENT_BASE.mkdir(exist_ok=True)
+    AGENT_BASE.mkdir(mode=0o755, exist_ok=True)
     for path, target in (
         (BASE / "current", release),
         (AGENT_BASE / "current", BASE / "current"),

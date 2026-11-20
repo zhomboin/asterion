@@ -43,8 +43,19 @@ def make_archive(work):
     Path(str(archive) + ".sha256").write_text(f"{digest}  {archive.name}\n")
     # 手动解包中断时可能已有部分文件，但没有安装器的 .sha256。
     partial = install.BASE / "releases/ci/web"
-    partial.mkdir(parents=True)
+    # 手动部署命令为发布树明确设置 0755，避免继承 CI 工具目录的组写权限。
+    run(
+        "install",
+        "-d",
+        "-m",
+        "0755",
+        install.BASE,
+        install.BASE / "releases",
+        partial.parent,
+        partial,
+    )
     shutil.copyfile(release / "web/index.html", partial / "index.html")
+    (partial / "index.html").chmod(0o644)
     return archive
 
 
@@ -81,6 +92,7 @@ def public_certificate(domain):
 def main():
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.geteuid() != 0:
         sys.exit("此测试只在一次性 GitHub Actions 虚拟机运行。")
+    os.umask(0o022)
     if any(
         os.path.lexists(p)
         for p in (

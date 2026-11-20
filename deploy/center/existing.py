@@ -144,7 +144,18 @@ def authorized_keys(account):
     # 使用账号自己的权限检查和使用 SSH 目录。
     return (
         subprocess.run(
-            ["runuser", "-u", account.pw_name, "--", "test", "-s", path], check=False
+            [
+                "runuser",
+                "-u",
+                account.pw_name,
+                "--",
+                "sh",
+                "-c",
+                'test -f "$1" && test -r "$1" && test -s "$1"',
+                "sh",
+                path,
+            ],
+            check=False,
         ).returncode
         == 0
     )
@@ -178,7 +189,7 @@ def reconcile_release(stage, release, digest, put):
     for source in stage.rglob("*"):
         target = release / source.relative_to(stage)
         if source.is_dir():
-            target.mkdir(exist_ok=True, parents=True)
+            target.mkdir(mode=0o755, exist_ok=True, parents=True)
         elif not target.exists():
             target.parent.mkdir(exist_ok=True, parents=True)
             with (

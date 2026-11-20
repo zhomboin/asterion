@@ -29,10 +29,15 @@ def put(path, data, mode=0o600):
     if path.is_symlink():
         raise ValueError(f"已有链接，请检查 {path}")
     if path.exists():
+        info = path.stat()
+        permissions = info.st_mode & 0o7777
         if (
             path.is_file()
+            and info.st_uid == os.geteuid()
+            and permissions & ~mode == 0
+            and permissions & 0o400
+            and permissions & 0o111 == mode & 0o111
             and path.read_text() == data
-            and path.stat().st_mode & 0o777 == mode
         ):
             return
         raise ValueError(f"已有配置内容或权限不同，请检查 {path}")
