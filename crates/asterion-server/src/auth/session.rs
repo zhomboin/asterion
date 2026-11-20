@@ -6,8 +6,9 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use super::AuthError;
 
-const SESSION_COOKIE: &str = "__Host-asterion_session";
-const SESSION_ATTRIBUTES: &str = "Path=/; Secure; HttpOnly; SameSite=Strict";
+const COOKIE: &str = "__Host-asterion_session";
+const ATTRIBUTES: &str = "Path=/; Secure; HttpOnly; SameSite=Strict";
+pub(super) const LOCAL_SESSION: &str = "x-asterion-local-session";
 const SESSION_LIFETIME: i64 = 12 * 60 * 60;
 const MAX_SESSIONS: i64 = 16;
 const TOKEN_BYTES: usize = 32;
@@ -47,7 +48,11 @@ impl FromRequestParts<SqlitePool> for AdminSession {
         parts: &mut Parts,
         pool: &SqlitePool,
     ) -> Result<Self, Self::Rejection> {
-        let hash = session_hash(&parts.headers).ok_or(AuthError::Unauthenticated)?;
+        let hash = session_hash(
+            &parts.headers,
+            parts.extensions.get::<crate::local::LocalPanel>().is_some(),
+        )
+        .ok_or(AuthError::Unauthenticated)?;
         let username = sqlx::query_scalar(
             "SELECT panel_admin.username FROM panel_sessions
              INNER JOIN panel_admin ON panel_admin.id = panel_sessions.admin_id
@@ -65,7 +70,12 @@ impl FromRequestParts<SqlitePool> for AdminSession {
     }
 }
 
-pub(super) fn session_hash(headers: &HeaderMap) -> Option<[u8; 32]> {
+pub(super) fn session_hash(headers: &HeaderMap, local: bool) -> Option<[u8; 32]> {
+    if local {
+        let mut values = headers.get_all(LOCAL_SESSION).iter();
+        let value = values.next()?.to_str().ok()?;
+        return (values.next().is_none() && valid_token(value)).then(|| sha256(value));
+    }
     let mut token = None;
     for header in headers.get_all(header::COOKIE) {
         let header = header.to_str().ok()?;
@@ -73,15 +83,10 @@ pub(super) fn session_hash(headers: &HeaderMap) -> Option<[u8; 32]> {
             let Some((key, value)) = part.trim().split_once('=') else {
                 continue;
             };
-            if key != SESSION_COOKIE {
+            if key != COOKIE {
                 continue;
             }
-            if token.is_some()
-                || value.len() != TOKEN_BYTES * 2
-                || !value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-            {
+            if token.is_some() || !valid_token(value) {
                 return None;
             }
             token = Some(value);
@@ -90,13 +95,25 @@ pub(super) fn session_hash(headers: &HeaderMap) -> Option<[u8; 32]> {
     token.map(sha256)
 }
 
-pub(super) async fn login_cookie(pool: &SqlitePool) -> Result<HeaderValue, AuthError> {
+fn valid_token(value: &str) -> bool {
+    value.len() == TOKEN_BYTES * 2
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+}
+
+pub(super) async fn issue_session(
+    pool: &SqlitePool,
+    local: bool,
+) -> Result<HeaderValue, AuthError> {
     let token = random_token()?;
     let hash = sha256(&token);
-    let cookie = HeaderValue::from_str(&format!(
-        "{SESSION_COOKIE}={token}; Max-Age={SESSION_LIFETIME}; {SESSION_ATTRIBUTES}"
-    ))
-    .map_err(AuthError::internal)?;
+    let value = if local {
+        token
+    } else {
+        format!("{COOKIE}={token}; Max-Age={SESSION_LIFETIME}; {ATTRIBUTES}")
+    };
+    let header = HeaderValue::from_str(&value).map_err(AuthError::internal)?;
 
     let mut transaction = pool.begin().await.map_err(AuthError::internal)?;
     sqlx::query(
@@ -117,7 +134,7 @@ pub(super) async fn login_cookie(pool: &SqlitePool) -> Result<HeaderValue, AuthE
     .await
     .map_err(AuthError::internal)?;
     transaction.commit().await.map_err(AuthError::internal)?;
-    Ok(cookie)
+    Ok(header)
 }
 
 pub(super) fn expire_cookie() -> HeaderValue {

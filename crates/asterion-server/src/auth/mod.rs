@@ -19,9 +19,9 @@ use crate::ssh_bus::SshBus;
 use crate::terminal::TerminalHub;
 
 use self::rate::LoginThrottle;
-use self::session::{expire_cookie, login_cookie, session_hash};
+use self::session::{LOCAL_SESSION, expire_cookie, issue_session, session_hash};
 
-pub use self::credentials::bootstrap_admin;
+pub use self::credentials::{bootstrap_admin, bootstrap_local_admin};
 pub use self::session::AdminSession;
 
 pub fn routes() -> Router<SqlitePool> {
@@ -69,6 +69,7 @@ struct UserResponse {
 
 async fn login(
     _: Csrf,
+    local: Option<Extension<crate::local::LocalPanel>>,
     State(pool): State<SqlitePool>,
     Extension(throttle): Extension<Arc<LoginThrottle>>,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -104,12 +105,17 @@ async fn login(
     .map_err(AuthError::internal)??
     .ok_or(AuthError::InvalidCredentials)?;
 
-    let cookie = login_cookie(&pool).await?;
+    let credential = issue_session(&pool, local.is_some()).await?;
+    let name = if local.is_some() {
+        axum::http::HeaderName::from_static(LOCAL_SESSION)
+    } else {
+        header::SET_COOKIE
+    };
     tracing::info!(action = "panel_login", outcome = "success", "管理面板登录");
     Ok((
         [
             (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-            (header::SET_COOKIE, cookie),
+            (name, credential),
         ],
         Json(UserResponse { username }),
     )
@@ -118,12 +124,13 @@ async fn login(
 
 async fn logout(
     _: Csrf,
+    local: Option<Extension<crate::local::LocalPanel>>,
     State(pool): State<SqlitePool>,
     terminals: Option<Extension<Arc<TerminalHub>>>,
     bus: Option<Extension<Arc<SshBus>>>,
     headers: HeaderMap,
 ) -> Result<Response, AuthError> {
-    if let Some(hash) = session_hash(&headers) {
+    if let Some(hash) = session_hash(&headers, local.is_some()) {
         let deletion = sqlx::query("DELETE FROM panel_sessions WHERE token_hash = ?")
             .bind(hash.as_slice())
             .execute(&pool)
@@ -141,7 +148,14 @@ async fn logout(
         StatusCode::NO_CONTENT,
         [
             (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-            (header::SET_COOKIE, expire_cookie()),
+            if local.is_some() {
+                (
+                    axum::http::HeaderName::from_static(LOCAL_SESSION),
+                    HeaderValue::from_static(""),
+                )
+            } else {
+                (header::SET_COOKIE, expire_cookie())
+            },
         ],
     )
         .into_response())

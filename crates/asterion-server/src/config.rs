@@ -11,8 +11,7 @@ pub struct Config {
     pub listen_addr: SocketAddr,
     pub database_url: String,
     pub web_dir: Option<PathBuf>,
-    pub tls_cert_file: PathBuf,
-    pub tls_key_file: PathBuf,
+    pub tls: Option<(PathBuf, PathBuf)>,
     pub admin_username: Option<String>,
     pub admin_password_file: Option<PathBuf>,
     pub sample_interval_secs: u64,
@@ -37,8 +36,26 @@ impl Config {
             );
         }
 
-        let terminal_enabled = match env_value("ASTERION_TERMINAL_ENABLED")?.as_deref() {
+        let local = match env_value("ASTERION_LOCAL")?.as_deref() {
             None | Some("0") => false,
+            Some("1") => true,
+            _ => anyhow::bail!("ASTERION_LOCAL 必须为 0 或 1"),
+        };
+        ensure!(
+            !local || listen_addr.ip().is_loopback(),
+            "本地模式只能监听回环地址"
+        );
+        let tls = if local {
+            None
+        } else {
+            Some((
+                required_path("ASTERION_TLS_CERT_FILE")?,
+                required_path("ASTERION_TLS_KEY_FILE")?,
+            ))
+        };
+        let terminal_enabled = match env_value("ASTERION_TERMINAL_ENABLED")?.as_deref() {
+            None => local,
+            Some("0") => false,
             Some("1") => true,
             Some(_) => anyhow::bail!("ASTERION_TERMINAL_ENABLED 必须为 0 或 1"),
         };
@@ -52,8 +69,7 @@ impl Config {
             listen_addr,
             database_url,
             web_dir,
-            tls_cert_file: required_path("ASTERION_TLS_CERT_FILE")?,
-            tls_key_file: required_path("ASTERION_TLS_KEY_FILE")?,
+            tls,
             admin_username: env_value("ASTERION_ADMIN_USERNAME")?,
             admin_password_file: env_path("ASTERION_ADMIN_PASSWORD_FILE"),
             sample_interval_secs: bounded_env(

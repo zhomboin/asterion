@@ -28,7 +28,38 @@ pub async fn bootstrap_admin(
     let path =
         PathBuf::from(password_file.context("首次启动需要配置 ASTERION_ADMIN_PASSWORD_FILE")?);
     let hash = tokio::task::spawn_blocking(move || hash_password_file(&path)).await??;
+    insert_admin(pool, username, hash).await
+}
 
+pub async fn bootstrap_local_admin(pool: &SqlitePool) -> Result<()> {
+    if configured_admin(pool).await?.is_some() {
+        return Ok(());
+    }
+    let hash = tokio::task::spawn_blocking(|| -> Result<String> {
+        let script = r#"exec </dev/tty || exit 1
+IFS= read -rs -p '首次启动，请设置本机面板口令（12 至 128 字节） ' password || exit 1
+printf '\n' >&2
+IFS= read -rs -p '请再次输入口令 ' confirm || exit 1
+printf '\n' >&2
+[[ "$password" == "$confirm" ]] || { echo '两次口令不同' >&2; exit 1; }
+printf '%s' "$password""#;
+        let output = std::process::Command::new("/bin/bash")
+            .args(["-c", script])
+            .stderr(std::process::Stdio::inherit())
+            .output()?;
+        ensure!(output.status.success(), "请从本机交互终端启动并设置口令");
+        let password = String::from_utf8(output.stdout)?;
+        ensure!(
+            valid_password(&password),
+            "口令必须为 12 至 128 UTF-8 字节的单行文本"
+        );
+        hash_password(&password)
+    })
+    .await??;
+    insert_admin(pool, "local", hash).await
+}
+
+async fn insert_admin(pool: &SqlitePool, username: &str, hash: String) -> Result<()> {
     let inserted = sqlx::query(
         "INSERT INTO panel_admin (id, username, password_hash) VALUES (1, ?, ?)
          ON CONFLICT(id) DO NOTHING",
@@ -76,6 +107,10 @@ pub fn valid_password(password: &str) -> bool {
 
 fn hash_password_file(path: &Path) -> Result<String> {
     let password = read_password(path)?;
+    hash_password(&password)
+}
+
+fn hash_password(password: &str) -> Result<String> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|_| anyhow!("无法生成管理员口令盐"))?;
     let salt = SaltString::encode_b64(&bytes).context("无法编码管理员口令盐")?;

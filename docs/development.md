@@ -1,6 +1,6 @@
 # 本地开发
 
-以下命令在 WSL 的 Ubuntu 项目目录执行。使用 Linux 版 Rust stable、Node.js 24、npm、OpenSSL 和 OpenSSH 客户端。
+在 WSL 的 Ubuntu 项目目录执行 `bash start.sh`，启动器会构建前后端并在本机监听。需要 Linux 版 Rust stable、Node.js 24、npm 和 OpenSSH 客户端。接入步骤见[本机使用](local.md)。以下步骤用于开发使用 HTTPS 的常驻中心，另需 OpenSSL。
 
 ## 1. 准备工作区
 

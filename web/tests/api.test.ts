@@ -2,6 +2,34 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { ApiError, request } from '../src/api.ts';
 
+test('本机登录会话用于同源 API，退出后清除', async (context) => {
+  const values = new Map<string, string>();
+  const local = {
+    location: { protocol: 'http:' },
+    sessionStorage: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    },
+  };
+  for (const [key, value] of Object.entries(local)) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, { configurable: true, value });
+    context.after(() => {
+      if (previous) Object.defineProperty(globalThis, key, previous);
+      else Reflect.deleteProperty(globalThis, key);
+    });
+  }
+  const header = 'X-Asterion-Local-Session';
+  const fetch = context.mock.method(globalThis, 'fetch', async () => Response.json({}));
+  fetch.mock.mockImplementationOnce(async () => Response.json({}, { headers: { [header]: 'fixture' } }));
+  await request('/auth/login', { method: 'POST', body: {} });
+  await request('/me');
+  assert.equal((fetch.mock.calls[1].arguments[1]?.headers as Headers).get(header), 'fixture');
+  await request('/auth/logout', { method: 'POST', response: 'empty' });
+  assert.equal(values.size, 0);
+});
+
 test('accepts a bodyless 202 for operation confirmations', async (context) => {
   const fetch = context.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 202 }));
   const result = await request('/operations/example/confirm', {

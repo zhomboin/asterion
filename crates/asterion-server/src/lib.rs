@@ -6,6 +6,7 @@ pub mod auth;
 pub mod config;
 pub mod database;
 mod http_policy;
+pub mod local;
 pub mod model;
 pub mod monitor;
 pub mod nodes;
