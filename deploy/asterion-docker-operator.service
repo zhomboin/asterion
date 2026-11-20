@@ -10,7 +10,7 @@ RuntimeDirectory=asterion-docker-operator
 RuntimeDirectoryMode=0750
 Environment=ASTERION_DOCKER_OPERATOR_SOCKET=/run/asterion-docker-operator/requests.sock
 LoadCredential=operator.json:/etc/asterion-agent/docker-operator.json
-Environment=ASTERION_DOCKER_OPERATOR_CONFIG_FILE=%d/operator.json
+Environment=ASTERION_DOCKER_OPERATOR_CONFIG_FILE=/run/credentials/%n/operator.json
 ExecStart=/opt/asterion-agent/current/bin/asterion-docker-operator
 Restart=on-failure
 RestartSec=3s

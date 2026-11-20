@@ -1,6 +1,6 @@
 # Ubuntu 服务器部署
 
-本文的 Bash 命令在服务器上执行。中心主机运行 Asterion、SQLite 和监控自身的 Agent。同机已有的 Nginx 负责域名 HTTPS 入口，Asterion 只监听回环地址。远端 Agent 通过域名上报；部署 SSH 会话结束后即可断开。首次安装流程面向 Ubuntu 24.04 和 systemd。
+本文的 Bash 命令在服务器上执行。中心主机运行 Asterion、SQLite 和监控自身的 Agent。同机的 Nginx 负责域名 HTTPS 入口，Asterion 只监听回环地址。远端 Agent 通过域名上报；部署 SSH 会话结束后即可断开。中心支持使用 systemd 的 Ubuntu 22.04 和 24.04。
 
 ## 一键初始化中心
 
@@ -10,17 +10,19 @@
 bash deploy/install-center.sh
 ```
 
-目标系统为使用 systemd 的 Ubuntu 24.04。将面板域名的 A 记录指向中心 IPv4，使用 DNS 直连，并允许管理电脑访问 HTTPS 入口。向导会安装依赖和 Nginx，从当前提交构建前端、中心及 Agent，校验发布包，再配置证书、账号和服务。已有同域名 Nginx 站点时，向导会提示冲突；自定义站点可使用下方第 2、3 节的合并步骤。
+目标系统为使用 systemd 的 Ubuntu 22.04 或 24.04。先将面板域名的 A 记录指向中心 IPv4，并允许管理电脑访问 HTTPS。使用包含本安装向导的项目检出目录。向导会在当前目录和运行账号的家目录查找 `asterion-*.tar.gz`，校验文件须与包放在一起。找到一个包会直接使用；找到多个包会列出路径供选择。包放在其他目录时，可按第 1 节显式指定路径。
 
-按提示输入域名、回环端口、管理电脑的出口 IPv4、新运维用户名和 SSH **公钥**。只部署中心时，远端节点 IPv4 可留空；要同时允许向一个节点部署 Agent，可填写该节点地址及其访问中心的出口地址。运维账号的 sudo 权限限于重启中心和读取最近 100 行日志。面板用户名为 `<运维用户名>-panel`。
+已经手动部署了一部分时，直接运行上面同一条命令。按提示选择原运维用户名。已有普通登录账号及其 SSH 公钥会被复用，缺少公钥时才需提供。向导会从现有中心配置和标准 Nginx 站点读取域名、端口和访问地址，其余参数按提示填写。
 
-准备面板口令和内部 CA 私钥口令，分别用于登录及日后续签。新签公网证书还需要 Let's Encrypt 邮箱和该域名所在 Cloudflare 区域的 DNS 编辑令牌。口令与令牌均隐藏输入。已有同名且配置了续期的 Certbot 证书时，向导会检查并复用。实际参数保存在中心的受保护目录。
+向导会把已解包的文件与所选归档逐一核对，补齐缺少的文件；核验内部证书、私钥和手动暂存的签发材料；识别 SQLite 中的管理员、待接入凭证和本机 Agent 身份。已经运行且配置生效的服务直接做健康检查。仅在注册、启用变更或退出一次性凭据配置时重启相关服务。
 
-看到“部署完成”即可打开输出的登录地址。此时向导已验证回环和 Nginx 域名入口的健康响应、Certbot 模拟续期，以及本机 Agent 使用持久身份重连后上报的新指标。外部 DNS 和防火墙可从管理电脑通过实际登录验收。执行中断时，修复报错原因后用原命令、原归档和已设置的面板口令重试。已有中心的版本更新见第 7 节。
+已有受信任的密钥和有效证书可直接使用。需要补签内部证书时输入原 CA 私钥口令；需要用已有面板账号登记 Agent 时输入原管理员口令；新签公网证书需要 Let's Encrypt 邮箱和该 Cloudflare 区域的 DNS 编辑令牌。口令与令牌均隐藏输入。
+
+出现发布内容不同、同名服务指向其他程序、证书与私钥不配对或节点身份不符时，向导会保留现场，并提示具体冲突。核对原发布包或配置后重跑即可。看到“部署完成”后，从管理电脑打开输出的登录地址，确认「中心服务器」在线。更新已安装版本见第 7 节。
 
 ## 1. 单独准备或使用发布包
 
-一键初始化会自动构建或复用构建账号家目录中与当前提交对应的归档。需要在同架构的 Ubuntu 构建机预先打包，或只为升级和远端 Agent 准备发布包时，在源码目录运行：
+未找到现成归档时，普通 sudo 用户运行一键向导会从当前提交构建。已有包须适配目标机器的架构与系统运行库；面向两个版本发布时，可在同架构的 Ubuntu 22.04 上构建并在两版验收。需要在同架构的 Ubuntu 构建机预先打包，或只为升级和远端 Agent 准备发布包时，在源码目录运行：
 
 ```bash
 bash deploy/build-release.sh
@@ -189,7 +191,8 @@ cat > /run/systemd/system/asterion-server.service.d/10-bootstrap.conf <<UNIT
 LoadCredential=admin-password:/run/asterion-first-admin
 RuntimeDirectory=asterion-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 %d/admin-password /run/asterion-bootstrap/admin-password
+ExecStart=
+ExecStart=/bin/sh -ec '/usr/bin/install -m 0600 /run/credentials/%n/admin-password /run/asterion-bootstrap/admin-password; exec /opt/asterion/current/bin/asterion-server'
 Environment=ASTERION_ADMIN_USERNAME=${ops}-panel
 Environment=ASTERION_ADMIN_PASSWORD_FILE=/run/asterion-bootstrap/admin-password
 UNIT
@@ -298,7 +301,7 @@ Wants=asterion-server.service
 After=asterion-server.service
 [Service]
 LoadCredential=ca.pem:/etc/asterion/deploy-ca.crt
-Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
+Environment=ASTERION_AGENT_CA_FILE=/run/credentials/%n/ca.pem
 UNIT
 ```
 
@@ -313,7 +316,8 @@ cat > /run/systemd/system/asterion-agent.service.d/10-self-enroll.conf <<'UNIT'
 LoadCredential=enrollment:/run/asterion-self-enrollment/token
 RuntimeDirectory=asterion-agent-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 %d/enrollment /run/asterion-agent-bootstrap/enrollment
+ExecStart=
+ExecStart=/bin/sh -ec '/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment; exec /opt/asterion-agent/current/bin/asterion-agent'
 Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment
 UNIT
 systemctl daemon-reload
@@ -395,7 +399,7 @@ sudoedit /etc/systemd/system/asterion-agent.service.d/20-private-ca.conf
 ```ini
 [Service]
 LoadCredential=ca.pem:/etc/asterion-agent/ca.pem
-Environment=ASTERION_AGENT_CA_FILE=%d/ca.pem
+Environment=ASTERION_AGENT_CA_FILE=/run/credentials/%n/ca.pem
 ```
 
 在「节点 → 接入服务器 → 手动接入」填写名称并选择对应环境。生成凭证后，确认中心地址为目标节点可访问的 HTTPS 域名。将连接配置复制到 `agent.env`，用编辑器将凭证写为一行。凭证只在签发时显示，有效期 10 分钟。
@@ -412,7 +416,8 @@ sudoedit /etc/systemd/system/asterion-agent.service.d/10-enrollment.conf
 LoadCredential=enrollment:/etc/asterion-agent/enrollment
 RuntimeDirectory=asterion-agent-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 %d/enrollment /run/asterion-agent-bootstrap/enrollment
+ExecStart=
+ExecStart=/bin/sh -ec '/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment; exec /opt/asterion-agent/current/bin/asterion-agent'
 Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment
 ```
 
@@ -515,7 +520,7 @@ sudo sqlite3 -batch -bail /var/lib/asterion/asterion.db <<'SQL'
 BEGIN IMMEDIATE;
 DELETE FROM panel_sessions;
 UPDATE node_enrollment_tokens
-SET revoked_at = unixepoch()
+SET revoked_at = CAST(strftime('%s','now') AS INTEGER)
 WHERE revoked_at IS NULL AND consumed_at IS NULL;
 COMMIT;
 SQL
@@ -525,7 +530,7 @@ SQL
 
 ```bash
 sudo sqlite3 -batch -bail /var/lib/asterion/asterion.db \
-  'UPDATE agent_credentials SET revoked_at = unixepoch() WHERE revoked_at IS NULL;'
+  "UPDATE agent_credentials SET revoked_at = CAST(strftime('%s','now') AS INTEGER) WHERE revoked_at IS NULL;"
 ```
 
 完成凭证核对后启动中心并按第 3 节验证。
@@ -540,7 +545,8 @@ sudo systemctl start asterion-server.service
 domain='<面板域名>'
 systemctl enable --now certbot.timer
 systemctl list-timers --all certbot.timer
-/usr/bin/certbot renew --cert-name "$domain" --dry-run --run-deploy-hooks
+/usr/bin/certbot renew --cert-name "$domain" --dry-run
+nginx -t
 ```
 
 恢复 Agent 时使用原中心地址和仍有效的设备凭证。迁移到另一台主机前先停止原 Agent，避免两台主机使用同一身份。在新主机先按第 4 节安装 Agent 程序及服务单元，然后直接恢复下列文件。使用系统信任根且目标机留有旧的私有 CA 配置时，先确认是否需要保留该配置。
@@ -695,7 +701,7 @@ sudo install -d -m 0755 /etc/systemd/system/asterion-agent.service.d
 sudoedit /etc/systemd/system/asterion-agent.service.d/40-operations.conf
 ```
 
-在 drop-in 的 `[Service]` 中设置 `LoadCredential=executor.json:/etc/asterion-agent/executor.json` 及 `Environment=ASTERION_EXECUTOR_CONFIG_FILE=%d/executor.json`。执行下方命令后先在面板确认允许列表和可控测试任务，再处理业务服务。
+在 drop-in 的 `[Service]` 中设置 `LoadCredential=executor.json:/etc/asterion-agent/executor.json` 及 `Environment=ASTERION_EXECUTOR_CONFIG_FILE=/run/credentials/%n/executor.json`。执行下方命令后先在面板确认允许列表和可控测试任务，再处理业务服务。
 
 ```bash
 sudo systemctl daemon-reload

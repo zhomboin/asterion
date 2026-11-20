@@ -20,7 +20,8 @@ const bootstrap = `[Service]
 LoadCredential=enrollment:/etc/asterion-agent/enrollment
 RuntimeDirectory=asterion-agent-bootstrap
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/install -m 0600 %d/enrollment /run/asterion-agent-bootstrap/enrollment
+ExecStart=
+ExecStart=/bin/sh -ec '/usr/bin/install -m 0600 /run/credentials/%n/enrollment /run/asterion-agent-bootstrap/enrollment; exec /opt/asterion-agent/current/bin/asterion-agent'
 Environment=ASTERION_AGENT_ENROLLMENT_FILE=/run/asterion-agent-bootstrap/enrollment`;
 
 export function AgentEnrollment({ enrollment, reEnroll, onClose }: { enrollment: Enrollment; reEnroll: boolean; onClose: () => void }) {

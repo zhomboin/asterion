@@ -11,8 +11,8 @@ WorkingDirectory=/var/lib/asterion
 EnvironmentFile=/etc/asterion/server.env
 LoadCredential=tls.crt:/etc/asterion/tls.crt
 LoadCredential=tls.key:/etc/asterion/tls.key
-Environment=ASTERION_TLS_CERT_FILE=%d/tls.crt
-Environment=ASTERION_TLS_KEY_FILE=%d/tls.key
+Environment=ASTERION_TLS_CERT_FILE=/run/credentials/%n/tls.crt
+Environment=ASTERION_TLS_KEY_FILE=/run/credentials/%n/tls.key
 ExecStart=/opt/asterion/current/bin/asterion-server
 Restart=on-failure
 RestartSec=3s

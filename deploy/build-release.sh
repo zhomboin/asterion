@@ -50,7 +50,7 @@ install -d "$stage/web" "$stage/deploy/managed" "$stage/deploy/center"
 cp -a web/dist/. "$stage/web/"
 install -m 0644 deploy/*.service deploy/*.env.example deploy/*.example.json deploy/self_monitor.py deploy/install-center.sh "$stage/deploy/"
 install -m 0644 deploy/managed/{service,common,containers,console,host}.py "$stage/deploy/managed/"
-install -m 0644 deploy/center/{install,host,inputs}.py deploy/center/*.in "$stage/deploy/center/"
+install -m 0644 deploy/center/{install,host,inputs,existing,pki,services}.py deploy/center/*.in "$stage/deploy/center/"
 tar -C "$stage" -czf "$work/$archive" bin web deploy
 (cd "$work" && sha256sum "$archive" > "$archive.sha256")
 mv -fT -- "$work/$archive" "$HOME/$archive"

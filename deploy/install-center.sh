@@ -4,7 +4,7 @@ set -euo pipefail
 deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
     echo '用法：bash deploy/install-center.sh [可信的 asterion-<构建编号>.tar.gz]'
-    echo '在中心服务器运行。省略归档时，以普通构建账号从当前检出构建。'
+    echo '在中心服务器运行。省略归档时先查找当前目录和家目录中的发布包。'
     exit 0
 fi
 if (( $# > 1 )); then
@@ -15,25 +15,48 @@ if [[ ! -t 0 || ! -t 1 ]]; then
     echo '请从中心服务器的交互终端运行安装向导。' >&2
     exit 1
 fi
-if [[ $(. /etc/os-release && echo "$ID:$VERSION_ID") != ubuntu:24.04 || ! -d /run/systemd/system ]]; then
-    echo '中心安装需要使用 systemd 的 Ubuntu 24.04。' >&2
+os_release=$(. /etc/os-release && echo "$ID:$VERSION_ID")
+if [[ $os_release != ubuntu:22.04 && $os_release != ubuntu:24.04 ]] || [[ ! -d /run/systemd/system ]]; then
+    echo '中心安装需要使用 systemd 的 Ubuntu 22.04 或 24.04。' >&2
     exit 1
 fi
 
 if (( $# )); then
     archive=$(realpath -e -- "$1")
 else
-    cd -- "$deploy_dir/.."
-    if (( EUID == 0 )); then
-        echo '源码构建请用普通 sudo 用户运行本命令。root 可传入可信归档直接安装。' >&2
-        exit 1
-    fi
-    release_id=$(git rev-parse --short=12 HEAD)
-    archive="$HOME/asterion-$release_id.tar.gz"
-    if [[ ! -f $archive || ! -f $archive.sha256 ]]; then
-        bash "$deploy_dir/build-release.sh"
-    fi
+    shopt -s nullglob
+    archives=()
+    declare -A seen=()
+    for file in "$PWD"/asterion-*.tar.gz "$HOME"/asterion-*.tar.gz; do
+        path=$(realpath -e -- "$file")
+        if [[ -z ${seen[$path]:-} ]]; then
+            archives+=("$path")
+            seen[$path]=1
+        fi
+    done
+    case ${#archives[@]} in
+        0)
+            if (( EUID == 0 )); then
+                echo '请提供已有发布包的绝对路径，或以普通 sudo 用户从源码构建。' >&2
+                exit 1
+            fi
+            cd -- "$deploy_dir/.."
+            release_id=$(git rev-parse --short=12 HEAD)
+            archive="$HOME/asterion-$release_id.tar.gz"
+            bash "$deploy_dir/build-release.sh"
+            ;;
+        1) archive=${archives[0]} ;;
+        *)
+            echo '找到多个发布包，请选择要继续安装的可信归档。'
+            PS3='编号：'
+            select archive in "${archives[@]}"; do
+                [[ -n $archive ]] && break
+            done
+            [[ -n ${archive:-} ]] || exit 1
+            ;;
+    esac
 fi
+printf '使用发布包 %s\n' "$archive"
 if (( EUID == 0 )); then
     exec /usr/bin/python3 -I -B "$deploy_dir/center/install.py" "$archive"
 fi
