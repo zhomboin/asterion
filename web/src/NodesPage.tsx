@@ -20,7 +20,7 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     const next: Record<string, string> = {};
-    for (const name of ['q', 'tag', 'status']) {
+    for (const name of ['q', 'status']) {
       const value = String(fields.get(name) ?? '').trim();
       if (value) next[name] = value;
     }
@@ -52,7 +52,6 @@ export function NodesPage({ manage, onExpired }: { manage: boolean; onExpired: (
       {manage && (
         <form className="filter-bar" onSubmit={search}>
           <label>搜索<input type="search" name="q" placeholder="名称或 ID" maxLength={100} /></label>
-          <label>标签<input name="tag" maxLength={32} /></label>
           <label>状态<select name="status">
             <option value="">全部状态</option>
             {nodeStatuses.map((status) => <option value={status} key={status}>{nodeStatusLabel[status]}</option>)}
@@ -106,7 +105,6 @@ function NodeRow({ node, manage }: { node: Node; manage: boolean }) {
         <h2><a className="text-link" href={'/nodes/' + encodeURIComponent(node.id)}>{node.name}</a></h2>
         <p>{environment}</p>
         {node.host_name && <p>宿主机：{node.host_name}</p>}
-        {node.tags.length > 0 && <ul className="tags" aria-label="标签">{node.tags.map((tag, index) => <li key={index}>{tag}</li>)}</ul>}
         {manage && node.notes && <p className="notes">{node.notes}</p>}
       </div>
       <dl className="node-meta">

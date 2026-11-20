@@ -12,6 +12,9 @@ use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
+    if asterion_server::ssh::host_key::is_confirmation_helper() {
+        return asterion_server::ssh::host_key::answer_prompt();
+    }
     if asterion_server::ssh::is_askpass() {
         return asterion_server::ssh::askpass();
     }

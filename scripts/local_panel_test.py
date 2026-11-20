@@ -29,10 +29,19 @@ def check_local_panel(work, stack, user, ssh_port, port, launch, wait):
     with (work / "key.pub").open("a") as authorized:
         authorized.write(f'command="{wrapper}" ' + (work / "minimal.pub").read_text())
     config = work / "client.conf"
+    (work / "revoked_hosts").write_text(
+        "@revoked " + (work / "known_hosts").read_text()
+    )
     config.write_text(f"""Host minimal
   IdentityFile {work}/minimal
 Host bad-key
   UserKnownHostsFile {work}/wrong_hosts
+Host first-use
+  UserKnownHostsFile {work}/new_hosts
+Host cannot-save
+  UserKnownHostsFile /dev/null
+Host revoked
+  UserKnownHostsFile {work}/revoked_hosts
 Host *
   HostName 127.0.0.1
   Port {ssh_port}
@@ -115,9 +124,16 @@ Host !minimal !explicit-key *
         else:
             raise AssertionError("本机面板错误接受了其他站点的请求")
     password = (work / "password").read_text()
+    try:
+        request("/api/v1/ssh/host-key", {"ssh_profile": "ssh://first-use"})
+    except urllib.error.HTTPError as error:
+        assert error.code == 401
+    else:
+        raise AssertionError("指纹核对需要面板登录")
     request("/api/v1/auth/login", dict(username="local", password=password))
     assert request("/api/v1/settings")["local_ssh"]
     assert request("/api/v1/ssh/profiles") == []
+    check_host_keys(work, request)
 
     def node(address):
         return (
@@ -179,3 +195,42 @@ Host !minimal !explicit-key *
     print("本机 HTTP 登录、来源校验、SSH 地址与别名、无 Python 采样和交互终端验证通过")
     check_auth(work, user, ssh_port, request, wait, sample)
     print("指定私钥、SSH 密码认证、拒绝后暂停及更换密码验证通过")
+
+
+def check_host_keys(work, request):
+    endpoint = "/api/v1/ssh/host-key"
+    payload = {"ssh_profile": "ssh://first-use"}
+    key = request(endpoint, payload)
+    fingerprint = subprocess.check_output(
+        ["ssh-keygen", "-lf", work / "host.pub", "-E", "sha256"], text=True
+    ).split()[1]
+    assert key == {
+        "status": "unknown",
+        "algorithm": "ED25519",
+        "fingerprint": fingerprint,
+    }, key
+    hosts = work / "new_hosts"
+    assert not hosts.exists() or not hosts.read_bytes()
+
+    def rejected(data):
+        try:
+            request(endpoint, data)
+        except urllib.error.HTTPError as error:
+            assert error.code == 409, error
+        else:
+            raise AssertionError("不应接受该主机密钥")
+
+    other = subprocess.check_output(
+        ["ssh-keygen", "-lf", work / "key.pub"], text=True
+    ).split()[1]
+    rejected({**payload, "fingerprint": other})
+    assert not hosts.exists() or not hosts.read_bytes()
+    trusted = {"status": "trusted"}
+    assert request(endpoint, {**payload, "fingerprint": fingerprint}) == trusted
+    assert hosts.stat().st_size and request(endpoint, payload) == trusted
+    rejected({**payload, "fingerprint": other})
+    rejected({"ssh_profile": "ssh://bad-key"})
+    rejected({"ssh_profile": "ssh://bad-key", "fingerprint": fingerprint})
+    rejected({"ssh_profile": "ssh://revoked", "fingerprint": fingerprint})
+    rejected({"ssh_profile": "ssh://cannot-save", "fingerprint": fingerprint})
+    print("已验证首次指纹、取消、确认保存、已信任主机与密钥冲突")

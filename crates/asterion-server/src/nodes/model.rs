@@ -22,8 +22,6 @@ pub(super) struct NodeInput {
     pub host_name: Option<String>,
     pub kind: NodeKind,
     #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
     pub notes: String,
 }
 
@@ -38,7 +36,6 @@ impl NodeInput {
             ssh_auth: self.ssh_auth,
             host_name: self.host_name.map(validate_name).transpose()?,
             kind: self.kind,
-            tags: validate_tags(self.tags)?,
             notes: validate_notes(self.notes)?,
         })
     }
@@ -53,7 +50,6 @@ pub(super) struct NodePatch {
     #[serde(default, deserialize_with = "nullable_name")]
     pub host_name: Option<Option<String>>,
     pub kind: Option<NodeKind>,
-    pub tags: Option<Vec<String>>,
     pub notes: Option<String>,
 }
 
@@ -67,7 +63,6 @@ impl NodePatch {
             && self.name.is_none()
             && self.host_name.is_none()
             && self.kind.is_none()
-            && self.tags.is_none()
             && self.notes.is_none()
         {
             return Err(ApiError::INVALID_INPUT);
@@ -85,7 +80,6 @@ impl NodePatch {
                 .map(|name| name.map(validate_name).transpose())
                 .transpose()?,
             kind: self.kind,
-            tags: self.tags.map(validate_tags).transpose()?,
             notes: self.notes.map(validate_notes).transpose()?,
         })
     }
@@ -123,27 +117,6 @@ fn validate_notes(value: String) -> Result<String, ApiError> {
         return Err(ApiError::INVALID_INPUT);
     }
     Ok(value.to_owned())
-}
-
-fn validate_tags(values: Vec<String>) -> Result<Vec<String>, ApiError> {
-    if values.len() > 12 {
-        return Err(ApiError::INVALID_INPUT);
-    }
-    let mut tags = Vec::with_capacity(values.len());
-    for value in values {
-        let tag = value.trim().to_owned();
-        if !bounded_text(&tag, 32) {
-            return Err(ApiError::INVALID_INPUT);
-        }
-        if !tags.contains(&tag) {
-            tags.push(tag);
-        }
-    }
-    Ok(tags)
-}
-
-pub(super) fn tags_json(tags: &[String]) -> Result<String, ApiError> {
-    serde_json::to_string(tags).map_err(|_| ApiError::internal("tags_encode"))
 }
 
 pub(super) fn bounded_text(value: &str, max_chars: usize) -> bool {
@@ -205,7 +178,6 @@ struct NodeRow {
     host_name: Option<String>,
     name: String,
     kind: String,
-    tags: String,
     notes: String,
     os: Option<String>,
     arch: Option<String>,
@@ -227,8 +199,6 @@ impl TryFrom<NodeRow> for NodeView {
             "wsl" => NodeKind::Wsl,
             _ => return Err(ApiError::internal("node_kind")),
         };
-        let tags =
-            serde_json::from_str(&row.tags).map_err(|_| ApiError::internal("tags_decode"))?;
         Ok(Self {
             node: Node {
                 id: row.id,
@@ -238,7 +208,6 @@ impl TryFrom<NodeRow> for NodeView {
                 os: row.os,
                 arch: row.arch,
                 wsl_distro: row.wsl_distro,
-                tags,
                 notes: row.notes,
                 last_seen_at: row.last_seen_at,
                 created_at: row.created_at,
@@ -270,7 +239,6 @@ pub(super) async fn get(pool: &SqlitePool, id: &str) -> Result<NodeView, ApiErro
 #[derive(Default)]
 pub(super) struct NodeFilters {
     pub q: Option<String>,
-    pub tag: Option<String>,
     pub status: Option<NodeStatus>,
     pub with_metrics: bool,
 }
@@ -313,13 +281,12 @@ pub(super) async fn list(
         "WITH node_status AS ({NODE_QUERY}), node_page AS (
              SELECT * FROM node_status AS n
              WHERE (?1 IS NULL OR instr(lower(n.name), lower(?1)) > 0 OR instr(n.id, lower(?1)) > 0)
-               AND (?2 IS NULL OR EXISTS (SELECT 1 FROM json_each(n.tags) AS t WHERE t.value = ?2))
-               AND (?3 IS NULL OR n.status = ?3)
-             ORDER BY n.created_at, n.id LIMIT ?4 OFFSET ?5
+               AND (?2 IS NULL OR n.status = ?2)
+             ORDER BY n.created_at, n.id LIMIT ?3 OFFSET ?4
          )
          SELECT p.*, m.observed_at AS metric_observed_at, m.sample AS metric_sample
          FROM node_page AS p
-         LEFT JOIN metric_samples AS m ON ?6 AND m.node_id = p.id AND m.observed_at = (
+         LEFT JOIN metric_samples AS m ON ?5 AND m.node_id = p.id AND m.observed_at = (
              SELECT max(observed_at) FROM metric_samples
              WHERE node_id = p.id AND observed_at <= unixepoch()
          )
@@ -333,7 +300,6 @@ pub(super) async fn list(
     let mut tx = pool.begin().await?;
     let mut rows = sqlx::query_as::<_, NodeListRow>(&sql)
         .bind(filters.q.as_deref())
-        .bind(filters.tag.as_deref())
         .bind(status)
         .bind(i64::from(limit) + 1)
         .bind(i64::from(offset))

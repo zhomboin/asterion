@@ -17,7 +17,6 @@ pub(super) struct Pagination {
     limit: Option<u16>,
     offset: Option<u32>,
     q: Option<String>,
-    tag: Option<String>,
     status: Option<NodeStatus>,
     metrics: Option<bool>,
 }
@@ -35,7 +34,6 @@ pub(super) async fn list(
     }
     let filters = NodeFilters {
         q: filter_text(query.q, 100)?,
-        tag: filter_text(query.tag, 32)?,
         status: query.status,
         with_metrics: query.metrics.unwrap_or_default(),
     };
@@ -78,13 +76,12 @@ pub(super) async fn create(
     };
 
     sqlx::query(
-        "INSERT INTO nodes (id, host_id, name, kind, tags, notes, ssh_profile) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO nodes (id, host_id, name, kind, notes, ssh_profile) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(host_id)
     .bind(&input.name)
     .bind(input.kind.as_str())
-    .bind(model::tags_json(&input.tags)?)
     .bind(&input.notes)
     .bind(&input.ssh_profile)
     .execute(&mut *tx)
@@ -110,7 +107,6 @@ pub(super) async fn update(
     let Json(input) = body.map_err(ApiError::invalid_json)?;
     let input = input.validate(local.is_some())?;
     let kind = input.kind.map(|kind| kind.as_str());
-    let tags = input.tags.as_deref().map(model::tags_json).transpose()?;
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let (existing_kind, bound) = sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT kind, ssh_profile FROM nodes WHERE id = ?",
@@ -142,7 +138,7 @@ pub(super) async fn update(
 
     sqlx::query(
         "UPDATE nodes SET name = COALESCE(?, name), kind = COALESCE(?, kind),
-             tags = COALESCE(?, tags), notes = COALESCE(?, notes),
+             notes = COALESCE(?, notes),
              wsl_distro = CASE WHEN ? = 'linux' THEN NULL ELSE wsl_distro END,
              host_id = CASE WHEN ? THEN ? ELSE host_id END,
              ssh_profile = COALESCE(?, ssh_profile), updated_at = unixepoch(),
@@ -152,7 +148,6 @@ pub(super) async fn update(
     )
     .bind(&input.name)
     .bind(kind)
-    .bind(tags)
     .bind(&input.notes)
     .bind(kind)
     .bind(replace_host)

@@ -4,6 +4,7 @@ import { useResource } from './useResource';
 import { PageHeader, Problem } from './ui';
 import { SshConnectionFields } from './SshConnectionFields';
 import { readConnection } from './sshConnection';
+import { useHostKeyConfirmation } from './HostKeyConfirmation';
 
 export function NodeConfigurationPage({ id, onExpired }: { id?: string; onExpired: () => void }) {
   const resource = useResource<Node>(id ? '/nodes/' + id : null, onExpired);
@@ -17,12 +18,17 @@ export function NodeConfigurationPage({ id, onExpired }: { id?: string; onExpire
   const [removing, setRemoving] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const hostKey = useHostKeyConfirmation();
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
+    const verifyOnly = ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value === 'verify';
     const data = new FormData(event.currentTarget);
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       const path = id ? '/nodes/' + id : '/nodes';
       if (removing) {
@@ -30,10 +36,16 @@ export function NodeConfigurationPage({ id, onExpired }: { id?: string; onExpire
         window.location.assign('/nodes');
       } else {
         const connection = direct ? readConnection(data) : { ssh_profile: boundProfile || selected };
+        if (verifyOnly || !id || connection.ssh_profile !== node?.ssh_profile) {
+          if (!await hostKey.verify(connection.ssh_profile)) return;
+          if (verifyOnly) {
+            setNotice('主机指纹已核对。');
+            return;
+          }
+        }
         const body = {
           name: String(data.get('name') ?? '').trim() || connection.ssh_profile.replace(/^ssh:\/\//u, '').slice(0, 100),
           kind: data.get('kind'), host_name: data.get('host_name') || null,
-          tags: String(data.get('tags')).split(/\r?\n/u).map(t => t.trim()).filter(Boolean),
           notes: data.get('notes'), ...connection,
         };
         const saved = await request<Node>(path, { method: id ? 'PATCH' : 'POST', body });
@@ -54,34 +66,43 @@ export function NodeConfigurationPage({ id, onExpired }: { id?: string; onExpire
     {settings.error && <Problem error={settings.error} retry={settings.refresh} />}
     {settings.data && (!id || node) && <section className="node-configuration stage-card">
       <form className="fields" onSubmit={save}>
-        {removing ? <p>确认移除节点「{node?.name}」及其监控数据？</p> : <>
-          <label>节点别名<input name="name" defaultValue={node?.name} required={!local || !!id}
-            placeholder={local && !id ? '留空使用连接地址' : undefined} maxLength={100} /></label>
-          {boundProfile ? <label>SSH 连接<input readOnly value={boundProfile} /></label> : <>
-            {!node?.ssh_profile && (!local || !!profiles.data?.length) && <label>SSH 连接<select required={!local}
-              value={selected} onChange={event => setSelected(event.target.value)}>
-              <option value="">{local ? '直接连接' : '选择中心已配置的连接'}</option>
-              {profiles.data?.map(profile => <option key={profile}>{profile}</option>)}
-            </select></label>}
-            {direct && <SshConnectionFields node={node} />}
-            {!local && profiles.data?.length === 0 && <p role="status">请先在中心的 SSH 配置文件中添加连接。</p>}
+        <fieldset className="node-fields" disabled={busy}>
+          {removing ? <p>确认移除节点「{node?.name}」及其监控数据？</p> : <>
+            <label>节点别名<input name="name" defaultValue={node?.name} required={!local || !!id}
+              placeholder={local && !id ? '留空使用连接地址' : undefined} maxLength={100} /></label>
+            {boundProfile ? <label>SSH 连接<input readOnly value={boundProfile} /></label> : <>
+              {!node?.ssh_profile && (!local || !!profiles.data?.length) && <label>SSH 连接<select required={!local}
+                value={selected} onChange={event => setSelected(event.target.value)}>
+                <option value="">{local ? '直接连接' : '选择中心已配置的连接'}</option>
+                {profiles.data?.map(profile => <option key={profile}>{profile}</option>)}
+              </select></label>}
+              {direct && <SshConnectionFields node={node} />}
+              {!local && profiles.data?.length === 0 && <p role="status">请先在中心的 SSH 配置文件中添加连接。</p>}
+            </>}
+            <details className="node-extra">
+              <summary>更多设置</summary>
+              <div className="fields">
+                <label>环境<select name="kind" defaultValue={node?.kind ?? 'linux'}>
+                  <option value="linux">Linux</option><option value="wsl">WSL</option>
+                </select></label>
+                <label>宿主机标识<input name="host_name" defaultValue={node?.host_name ?? ''} maxLength={100} /></label>
+                <label>备注<textarea name="notes" defaultValue={node?.notes} rows={2} maxLength={1000} /></label>
+              </div>
+            </details>
           </>}
-          <label>环境<select name="kind" defaultValue={node?.kind ?? 'linux'}>
-            <option value="linux">Linux</option><option value="wsl">WSL</option>
-          </select></label>
-          <label>宿主机标识<input name="host_name" defaultValue={node?.host_name ?? ''} maxLength={100} /></label>
-          <label>标签<textarea name="tags" defaultValue={node?.tags.join('\n')} placeholder="每行一个标签" rows={3} /></label>
-          <label>备注<textarea name="notes" defaultValue={node?.notes} rows={3} maxLength={1000} /></label>
-        </>}
-        {error && <p className="error" role="alert">{error}</p>}
-        <div className="dialog-actions">
-          {id && !removing && <button type="button" className="danger quiet" onClick={() => setRemoving(true)}>移除节点</button>}
-          {removing && <button type="button" onClick={() => setRemoving(false)} disabled={busy}>返回</button>}
-          <button className={removing ? 'primary danger' : 'primary'} type="submit" disabled={busy}>
-            {removing ? '确认移除' : id ? '保存' : '接入节点'}
-          </button>
-        </div>
+          {error && <p className="error" role="alert">{error}</p>}
+          {notice && <p role="status">{notice}</p>}
+          <div className="dialog-actions">
+            {id && !removing && <button type="button" className="danger quiet" onClick={() => setRemoving(true)}>移除节点</button>}
+            {removing && <button type="button" onClick={() => setRemoving(false)} disabled={busy}>返回</button>}
+            <button className={removing ? 'primary danger' : 'primary'} type="submit" disabled={busy}>
+              {removing ? '确认移除' : id ? '保存' : '接入节点'}
+            </button>
+            {id && !removing && <button type="submit" value="verify" formNoValidate>核对指纹</button>}
+          </div>
+        </fieldset>
       </form>
+      {hostKey.dialog}
     </section>}
   </>;
 }
