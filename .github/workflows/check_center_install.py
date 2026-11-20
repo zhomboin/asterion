@@ -19,11 +19,13 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "deploy/center"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docker_reader
 import host
 import install
 import pki
 import services
+from check_center_managed import verify_managed
 
 
 def run(*args, **kwargs):
@@ -38,8 +40,19 @@ def make_archive(work):
     (release / "web").mkdir()
     (release / "web/index.html").write_text("Asterion")
     (release / "deploy").mkdir()
-    for name in (host.SERVER, host.AGENT, docker_reader.UNIT, "self_monitor.py"):
+    for name in (
+        host.SERVER,
+        host.AGENT,
+        docker_reader.UNIT,
+        "asterion-managed@.service",
+        "self_monitor.py",
+    ):
         shutil.copyfile(ROOT / "deploy" / name, release / "deploy" / name)
+    shutil.copytree(
+        ROOT / "deploy/managed",
+        release / "deploy/managed",
+        ignore=shutil.ignore_patterns("test_*", "__pycache__"),
+    )
     unit = release / "deploy" / host.SERVER
     unit.write_text(unit.read_text().replace("/run/credentials/%n/", "%d/"))
     host.put(host.UNITS / host.SERVER, unit.read_text(), 0o644)
@@ -132,6 +145,9 @@ def check_panel_inventory(work, port, username, password, node_id):
             data = json.loads(result.stdout)
             assert data["status"] == "available" and data["engine_id"]
             assert any(row["id"] == container for row in data["containers"])
+            verify_managed(
+                ROOT, run, curl, cookie, f"{base}/nodes/{node_id}", container
+            )
         finally:
             run("docker", "rm", container)
     finally:
@@ -193,6 +209,7 @@ def main():
         with (
             patch.object(install, "settings", return_value=prompt),
             patch.object(docker_reader, "ask", return_value="2") as docker_choice,
+            patch.object(install.managed_setup.targets, "choice", return_value="0"),
             patch.object(host, "run", side_effect=local_commands),
             patch.object(host, "ask", return_value="admin@example.invalid") as email,
             patch.object(
@@ -306,6 +323,10 @@ def main():
                     json.loads(identity)["node_id"],
                 )
                 docker_choice.return_value = "1"
+                assert (
+                    pid(host.SERVER) == after[0] and pid(docker_reader.UNIT) == after[2]
+                )
+                after[1] = pid(host.AGENT)
                 install.provision(archive)
                 assert docker_choice.call_args.args[-1] == "2"
                 assert [
@@ -319,6 +340,8 @@ def main():
                         host.AGENT,
                         host.SERVER,
                         docker_reader.UNIT,
+                        "asterion-managed@configs.service",
+                        "asterion-managed@containers.service",
                         "certbot.timer",
                         "nginx",
                     ],

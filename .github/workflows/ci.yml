@@ -58,11 +58,11 @@ jobs:
           set result [wait]
           exit [expr {[lindex $result 2] != 0 || [lindex $result 3] != 1}]
           TCL
-      - name: 在本机 ACME 服务上验收 HTTP 签发、续期和面板鉴权
+      - name: 验收中心证书、面板鉴权及节点操作补配
         run: bash .github/workflows/check_center_acme.sh
       - name: 查看安装服务日志
         if: failure()
-        run: sudo journalctl --no-pager -o short-precise -u asterion-server.service -u asterion-agent.service -n 100
+        run: sudo journalctl --no-pager -o short-precise -u asterion-server.service -u asterion-agent.service -u asterion-managed@configs.service -u asterion-managed@containers.service -n 100
 
   web:
     runs-on: ubuntu-latest
