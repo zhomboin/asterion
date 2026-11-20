@@ -13,9 +13,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
+import existing
 import host
 import inputs
 import install
+import services
 
 sys.path.insert(0, str(host.HERE.parent))
 import self_monitor
@@ -105,7 +107,7 @@ class InstallTests(unittest.TestCase):
         dangling = self.root / "current"
         dangling.symlink_to(self.root / "missing")
         with self.assertRaises(ValueError):
-            install.fresh([dangling])
+            existing.trusted(dangling)
 
     def test_restart_uses_same_release_and_preserves_state(self):
         archive, digest = self.archive()
@@ -168,7 +170,6 @@ class InstallTests(unittest.TestCase):
                 "--cert-name",
                 self.c["domain"],
                 "--dry-run",
-                "--run-deploy-hooks",
             )
         hook = self.root / "renewal-hooks/deploy" / ("asterion-" + self.c["domain"])
         self.assertIn("RENEWED_LINEAGE", hook.read_text())
@@ -185,60 +186,47 @@ class InstallTests(unittest.TestCase):
         }
         paths["ENROLL"].mkdir()
         with (
-            patch.multiple(install, **paths),
-            patch.object(install, "run") as system,
-            patch.object(install, "health"),
-            patch.object(install, "monitor") as monitor,
+            patch.multiple(services, **paths),
+            patch.object(services, "run") as system,
+            patch.object(services, "ensure_running"),
+            patch.object(services, "active", return_value=False),
+            patch.object(services, "admin_name", return_value=None),
+            patch.object(services, "password", return_value=secrets.token_hex(12)),
+            patch.object(services, "enrollment_state", return_value="register"),
         ):
-
-            def enroll(command, *args):
-                if command == "register":
-                    self.assertEqual(install.FIRST_ADMIN.stat().st_mode & 0o777, 0o600)
-                    (install.ENROLL / "token").touch()
-                else:
-                    self.assertTrue(
-                        install.ENROLL_CONF.exists() or not install.FIRST_ADMIN.exists()
-                    )
-
-            monitor.side_effect = enroll
-            install.enable_services(self.c, secrets.token_hex(12))
+            monitor = Mock()
+            services.activate(self.c, Mock(), monitor)
             self.assertIn(
-                call("systemctl", "restart", install.SERVER, install.AGENT),
+                call("systemctl", "restart", services.SERVER, services.AGENT),
                 system.call_args_list,
             )
             monitor.side_effect = RuntimeError("连接失败")
             with self.assertRaises(RuntimeError):
-                install.enable_services(self.c, secrets.token_hex(12))
+                services.activate(self.c, Mock(), monitor)
             self.assertIn(
-                call("systemctl", "stop", install.AGENT, install.SERVER),
-                system.call_args_list,
+                call("systemctl", "stop", services.SERVER), system.call_args_list
             )
             for path in (
-                install.FIRST_ADMIN,
-                install.ADMIN_CONF,
-                install.ENROLL_CONF,
-                install.ENROLL / "token",
+                services.FIRST_ADMIN,
+                services.ADMIN_CONF,
+                services.ENROLL_CONF,
             ):
                 self.assertFalse(path.exists())
 
-    def test_finished_install_only_checks_health(self):
+    def test_different_recorded_release_is_rejected(self):
         archive, _ = self.archive()
         state = self.root / "install.json"
-        state.write_text(json.dumps(self.c))
-        done = self.root / "complete"
-        done.touch()
+        host.put(state, json.dumps(self.c))
         with (
-            patch.multiple(install, STATE=state, DONE=done),
-            patch.object(install, "health") as health,
-            patch.object(install, "run") as system,
+            patch.multiple(
+                install, CONFIG=self.root, STATE=state, DONE=self.root / "complete"
+            ),
+            patch.object(install, "check_binaries"),
+            patch.object(install, "runtime_tools") as deps,
         ):
-            install.provision(archive)
-            health.assert_called_once_with(self.c, public=True)
-            system.assert_not_called()
-            done.unlink()
-            with self.assertRaisesRegex(ValueError, "相同"):
+            with self.assertRaisesRegex(ValueError, "发布包与安装记录不同"):
                 install.provision(archive)
-            system.assert_not_called()
+            deps.assert_not_called()
 
     def test_reissue_only_for_recorded_pending_node(self):
         password = self.root / "password"

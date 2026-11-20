@@ -1,133 +1,109 @@
-"""在 Ubuntu 中初始化 Asterion 中心并验收 HTTPS 和自监控。"""
+"""核对并补齐 Ubuntu 中心的发布文件、配置及服务。"""
 
 import fcntl
-import getpass
-import grp
 import json
 import os
-import pwd
+import platform
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tarfile
 import tempfile
 from pathlib import Path
 
-# 入口使用系统 Python 的隔离模式，只加载与安装器一同交付的模块。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import existing
 import host
-from host import AGENT, CONFIG, RUNTIME, SERVER, UNITS, put, run
-from inputs import ask, password, release_info, settings, unpack
+import pki
+import services
+from host import AGENT, CONFIG, SERVER, UNITS, put, run
+from inputs import release_info, settings, unpack
 
 STATE = CONFIG / "install.json"
 DONE = CONFIG / "install.complete"
 BASE = Path("/opt/asterion")
 AGENT_BASE = Path("/opt/asterion-agent")
 AGENT_CONFIG = Path("/etc/asterion-agent")
-FIRST_ADMIN = Path("/run/asterion-first-admin")
-ENROLL = Path("/run/asterion-self-enrollment")
-IDENTITY = Path("/var/lib/asterion-agent/identity.json")
-ADMIN_CONF = RUNTIME / (SERVER + ".d/10-bootstrap.conf")
-ENROLL_CONF = RUNTIME / (AGENT + ".d/10-self-enroll.conf")
+SETUP = Path("/run/asterion-setup")
 
 
-def fresh(paths):
-    for path in paths:
-        if os.path.lexists(path):
+def runtime_tools():
+    packages = [
+        "nginx",
+        "openssl",
+        "ca-certificates",
+        "curl",
+        "python3-paramiko",
+        "sqlite3",
+        "sudo",
+        "openssh-client",
+        "certbot",
+        "python3-certbot-dns-cloudflare",
+    ]
+    missing = []
+    for package in packages:
+        result = subprocess.run(
+            ["dpkg-query", "-W", "-f=${db:Status-Status}", package],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.stdout != "installed":
+            missing.append(package)
+    if missing:
+        run("apt-get", "update")
+        run("apt-get", "install", "-y", *missing)
+
+
+def check_binaries(stage):
+    # 使用系统加载器核对动态依赖及 glibc 版本，无需运行服务或安装编译器。
+    loaders = {
+        "x86_64": (62, "/lib64/ld-linux-x86-64.so.2"),
+        "aarch64": (183, "/lib/ld-linux-aarch64.so.1"),
+    }
+    for name in ("asterion-server", "asterion-agent"):
+        binary = stage / "bin" / name
+        with binary.open("rb") as stream:
+            header = stream.read(20)
+        arch = loaders.get(platform.machine())
+        if (
+            not arch
+            or len(header) != 20
+            or header[:6] != b"\x7fELF\x02\x01"
+            or int.from_bytes(header[18:], "little") != arch[0]
+        ):
+            raise ValueError(f"{name} 与目标 CPU 架构不兼容，请选用适配本机的发布包")
+        result = subprocess.run(
+            [arch[1], "--list", binary], text=True, capture_output=True, check=False
+        )
+        if result.returncode:
             raise ValueError(
-                f"已有 {path}，首次安装无法接管。已有中心请按部署文档升级。"
+                f"{name} 无法加载，请选用目标系统构建的发布包：{result.stderr.strip()}"
             )
 
 
-def check_fresh():
-    fresh(
-        [
-            CONFIG,
-            BASE,
-            AGENT_BASE,
-            AGENT_CONFIG,
-            FIRST_ADMIN,
-            ENROLL,
-            Path("/run/asterion-setup"),
-            Path("/run/asterion-bootstrap"),
-            Path("/run/asterion-agent-bootstrap"),
-        ]
-    )
-    for name in ("asterion", "asterion-agent"):
-        fresh([Path("/var/lib") / name, Path("/var/lib/private") / name])
-    for unit in (SERVER, AGENT):
-        fresh(
-            [
-                base / (unit + suffix)
-                for base in (UNITS, RUNTIME)
-                for suffix in ("", ".d")
-            ]
-        )
-        if (
-            run(
-                "systemctl",
-                "show",
-                "-p",
-                "LoadState",
-                "--value",
-                unit,
-                stdout=subprocess.PIPE,
-            ).stdout.strip()
-            != "not-found"
-        ):
-            raise ValueError(f"系统已加载 {unit}")
+def check_layout(c, stage):
+    for path in (BASE, BASE / "releases", AGENT_BASE, CONFIG, AGENT_CONFIG):
+        existing.trusted(path, directory=True)
+    release = BASE / "releases" / c["revision"]
+    existing.trusted(release, directory=True)
+    existing.check_link(BASE / "current", release)
+    existing.check_link(AGENT_BASE / "current", BASE / "current")
+    services.check_units(c, stage)
+    for path, expected in (
+        (CONFIG / "server.env", host.server_config(c)),
+        (AGENT_CONFIG / "agent.env", agent_config(c)),
+    ):
+        values = existing.env_values(path)
+        for line in expected.splitlines():
+            key, value = line.split("=", 1)
+            if values.get(key, value) != value:
+                raise ValueError(f"{path} 中 {key} 与目标配置不一致")
 
 
-def initialize(revision, digest):
-    c = settings()
-    fresh(
-        [
-            host.site_path(c),
-            Path("/home") / c["ops"],
-            Path("/etc/sudoers.d") / ("asterion-" + c["ops"]),
-            host.LE / "renewal-hooks/deploy" / ("asterion-" + c["domain"]),
-        ]
-    )
-    host.check_site(c)
-    for lookup in (pwd.getpwnam, grp.getgrnam):
-        try:
-            lookup(c["ops"])
-        except KeyError:
-            continue
-        raise ValueError("已有同名运维账号或组，请使用新名称")
-    if run(
-        "ss", "-H", "-lnt", "sport = :" + c["port"], stdout=subprocess.PIPE
-    ).stdout.strip():
-        raise ValueError("中心内部端口已被占用")
-    run("getent", "ahostsv4", c["domain"], stdout=subprocess.DEVNULL)
-    print(f"将部署 https://{c['domain']}，管理员为 {c['ops']}-panel。")
-    print("请将内部 CA 口令保存到密码管理器，续签回环证书需要它。")
-    while True:
-        phrase = ask(
-            "设置内部 CA 私钥口令（至少 12 位）",
-            lambda s: (
-                len(s) >= 12 and s.strip() and not any(ch in s for ch in "\r\n\0")
-            ),
-            secret=True,
-        )
-        if phrase == getpass.getpass("确认内部 CA 口令："):
-            break
-        print("两次输入不同。")
-    c.update(revision=revision, sha256=digest)
-    with tempfile.TemporaryDirectory(dir="/etc", prefix=".asterion-init-") as tmp:
-        config = Path(tmp) / "asterion"
-        config.mkdir(mode=0o750)
-        host.internal_tls(config, phrase)
-        put(config / "server.env", host.server_config(c))
-        put(config / STATE.name, json.dumps(c, ensure_ascii=False) + "\n")
-        config.rename(CONFIG)
-    return c
-
-
-def link(path, target):
-    if path.is_symlink() and path.readlink() == target:
-        return
-    path.symlink_to(target)
+def agent_config(c):
+    return f"ASTERION_SERVER_URL=https://127.0.0.1:{c['port']}\nASTERION_AGENT_STATE_FILE=/var/lib/asterion-agent/identity.json\n"
 
 
 def install_release(c, stage):
@@ -135,25 +111,26 @@ def install_release(c, stage):
     releases.mkdir(parents=True, exist_ok=True)
     release = releases / c["revision"]
     if release.exists():
-        if (release / ".sha256").read_text().strip() != c["sha256"]:
-            raise ValueError("已有发布目录与本次归档不同")
+        existing.reconcile_release(stage, release, c["sha256"], put)
+        print("已核对并复用解包目录。")
     else:
         with tempfile.TemporaryDirectory(dir=releases) as tmp:
             dest = Path(tmp) / "release"
             shutil.copytree(stage, dest)
             put(dest / ".sha256", c["sha256"] + "\n")
             dest.rename(release)
-    link(BASE / "current", release)
     AGENT_BASE.mkdir(exist_ok=True)
-    link(AGENT_BASE / "current", BASE / "current")
+    for path, target in (
+        (BASE / "current", release),
+        (AGENT_BASE / "current", BASE / "current"),
+    ):
+        existing.check_link(path, target)
+        if not path.is_symlink():
+            path.symlink_to(target)
     for unit in (SERVER, AGENT):
         put(UNITS / unit, (release / "deploy" / unit).read_text(), 0o644)
     AGENT_CONFIG.mkdir(mode=0o750, exist_ok=True)
-    put(
-        AGENT_CONFIG / "agent.env",
-        f"ASTERION_SERVER_URL=https://127.0.0.1:{c['port']}\n"
-        "ASTERION_AGENT_STATE_FILE=/var/lib/asterion-agent/identity.json\n",
-    )
+    existing.ensure_env(AGENT_CONFIG / "agent.env", agent_config(c), put)
     put(
         UNITS / (AGENT + ".d") / "20-local.conf",
         host.template("agent-local.conf"),
@@ -161,7 +138,7 @@ def install_release(c, stage):
     )
 
 
-def health(c, public=False):
+def health(c, public=False, retry=True):
     args = [
         "curl",
         "--noproxy",
@@ -172,7 +149,7 @@ def health(c, public=False):
         "--max-time",
         "5",
         "--retry",
-        "8",
+        "8" if retry else "0",
         "--retry-delay",
         "1",
         "--retry-all-errors",
@@ -194,106 +171,63 @@ def monitor(*args):
     run("/usr/bin/python3", "-I", "-B", host.HERE.parent / "self_monitor.py", *args)
 
 
-def enable_services(c, secret):
-    # 这些运行时路径在首次接管前均已检查，失败后保留身份和持久配置。
-    sampled = False
-    try:
-        FIRST_ADMIN.unlink(missing_ok=True)
-        put(FIRST_ADMIN, secret + "\n")
-        put(ADMIN_CONF, host.template("admin.conf", ops=c["ops"]), 0o644)
-        run("systemctl", "daemon-reload")
-        run("systemd-analyze", "verify", SERVER, AGENT)
-        run("systemctl", "enable", "--now", SERVER)
-        health(c)
-        if not IDENTITY.is_file() or not json.loads(IDENTITY.read_text()).get(
-            "node_id"
-        ):
-            run("systemctl", "stop", AGENT)
-            monitor(
-                "register",
-                "--port",
-                c["port"],
-                "--username",
-                c["ops"] + "-panel",
-                "--receipt",
-                CONFIG / "self-node",
-            )
-            if (ENROLL / "token").is_file():
-                put(ENROLL_CONF, host.template("enroll.conf"), 0o644)
-            run("systemctl", "daemon-reload")
-        run("systemctl", "enable", AGENT)
-        run("systemctl", "restart", AGENT)
-        monitor("wait")
-        sampled = True
-    finally:
-        ADMIN_CONF.unlink(missing_ok=True)
-        ENROLL_CONF.unlink(missing_ok=True)
-        FIRST_ADMIN.unlink(missing_ok=True)
-        (ENROLL / "token").unlink(missing_ok=True)
-        run("systemctl", "daemon-reload")
-        # 重启释放 systemd 的凭据和 RuntimeDirectory 中的一次性副本。
-        if sampled:
-            run("systemctl", "restart", SERVER, AGENT)
-        else:
-            run("systemctl", "stop", AGENT, SERVER)
-    health(c)
-    monitor("wait")
-
-
 def provision(archive):
     revision, digest = release_info(archive)
-    c = None
-    if STATE.is_file():
-        c = json.loads(STATE.read_text())
-        if DONE.is_file():
-            health(c, public=True)
-            print(
-                f"中心已初始化。面板 https://{c['domain']}/login，升级请按部署文档操作。"
-            )
-            return
-        if (revision, digest) != (c["revision"], c["sha256"]):
-            raise ValueError("请使用与中断安装相同的发布包继续")
-    else:
-        check_fresh()
+    existing.trusted(CONFIG, directory=True)
+    recorded = existing.trusted(STATE, private=True)
+    existing.trusted(DONE)
     with tempfile.TemporaryDirectory(prefix="asterion-install-") as tmp:
         work = Path(tmp)
         stage = work / "release"
         print("正在校验并解包发布文件。", flush=True)
         unpack(archive, digest, stage)
-        run("apt-get", "update")
-        run(
-            "apt-get",
-            "install",
-            "-y",
-            "nginx",
-            "openssl",
-            "ca-certificates",
-            "curl",
-            "python3-paramiko",
-            "sqlite3",
-            "sudo",
-            "openssh-client",
-            "certbot",
-            "python3-certbot-dns-cloudflare",
-        )
-        run("systemctl", "enable", "--now", "nginx")
-        if c is None:
-            c = initialize(revision, digest)
+        check_binaries(stage)
+        if recorded:
+            c = json.loads(STATE.read_text())
+            if (revision, digest) != (c["revision"], c["sha256"]):
+                raise ValueError("发布包与安装记录不同；更新已安装版本请使用升级流程")
         else:
-            print("继续上次安装。若已建立面板账号，请输入原面板口令。")
-        secret = password()
-        if not (CONFIG / "install.tls-ready").exists():
-            host.public_tls(c)
-            put(CONFIG / "install.tls-ready", "\n")
-        host.operator(c, work)
+            c = settings(existing.hints(CONFIG, host.SITES, host.SUDOERS))
+            c.update(revision=revision, sha256=digest)
+        check_layout(c, stage)
+        existing.login_account(c["ops"])
+        if (
+            not services.active(SERVER)
+            and run(
+                "ss", "-H", "-lnt", "sport = :" + c["port"], stdout=subprocess.PIPE
+            ).stdout.strip()
+        ):
+            raise ValueError(f"回环端口 {c['port']} 被其他服务占用")
+        runtime_tools()
+        host.check_existing_site(c)
+        CONFIG.mkdir(mode=0o750, exist_ok=True)
         install_release(c, stage)
-        enable_services(c, secret)
-        host.enable_site(c)
+        pki.ensure_tls(CONFIG, SETUP, work)
+        existing.ensure_env(CONFIG / "server.env", host.server_config(c), put)
+        if not recorded:
+            put(STATE, json.dumps(c, ensure_ascii=False) + "\n")
+        host.operator(c, work, SETUP)
+        tls_marker = CONFIG / "install.tls-ready"
+        host.public_tls(c, verified=existing.trusted(tls_marker))
+        put(tls_marker, "\n")
+        services.ensure_running("nginx")
+        services.activate(c, health, monitor)
+
+        def live():
+            try:
+                health(c, public=True, retry=False)
+                return True
+            except (ValueError, subprocess.CalledProcessError):
+                return False
+
+        host.enable_site(c, live)
         health(c, public=True)
         for unit in (SERVER, AGENT, "nginx", "certbot.timer"):
             run("systemctl", "is-active", unit)
         put(DONE, "\n")
-        print(f"部署完成。面板 https://{c['domain']}/login，用户名 {c['ops']}-panel。")
+        print(
+            f"部署完成。面板 https://{c['domain']}/login，用户名 {existing.admin_name(services.DATABASE)}。"
+        )
 
 
 def main():
@@ -320,6 +254,7 @@ if __name__ == "__main__":
         OSError,
         ValueError,
         tarfile.TarError,
+        sqlite3.Error,
         subprocess.CalledProcessError,
         EOFError,
         KeyboardInterrupt,

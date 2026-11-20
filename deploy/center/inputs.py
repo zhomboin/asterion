@@ -40,38 +40,47 @@ def ipv4(value):
     return True
 
 
-def settings():
-    domain = ask("面板域名（已设 DNS A 记录）", domain_ok)
-    port = ask(
+def settings(known=None):
+    known = known or {}
+    domain = known.get("domain") or ask("面板域名（已设 DNS A 记录）", domain_ok)
+    port = known.get("port") or ask(
         "中心回环监听端口",
         lambda s: re.fullmatch(r"[1-9][0-9]{4}", s) and int(s) <= 65535,
         "18080",
     )
-    admin_ip = ask("允许访问面板的管理电脑出口 IPv4", ipv4)
-    node = ask(
-        "允许 SSH 部署的节点 IPv4（只部署中心可留空）", lambda s: not s or ipv4(s)
+    admin_ip = known.get("admin_ip") or ask("允许访问面板的管理电脑出口 IPv4", ipv4)
+    node = known.get("node")
+    if node is None:
+        node = ask(
+            "允许 SSH 部署的节点 IPv4（只部署中心可留空）", lambda s: not s or ipv4(s)
+        )
+    agent = known.get("agent") or (
+        ask("节点访问中心的出口 IPv4", ipv4, node) if node else ""
     )
-    agent = ask("节点访问中心的出口 IPv4", ipv4, node) if node else ""
     ops = ask(
-        "新建的个人 Linux 运维用户名",
-        lambda s: re.fullmatch(r"[a-z][a-z0-9-]{0,23}", s),
+        "复用或新建的个人 Linux 运维用户名",
+        lambda s: re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", s),
+        known.get("ops", ""),
     )
+    return {
+        "domain": domain,
+        "port": port,
+        "admin_ip": admin_ip,
+        "node": node,
+        "agent": agent,
+        "ops": ops,
+    }
+
+
+def public_key():
     key = ask(
-        "此账号的 SSH 公钥",
+        "运维账号的 SSH 公钥",
         lambda s: re.fullmatch(
             r"(?:ssh-|ecdsa-|sk-)[\w@.-]+ [A-Za-z0-9+/=]+(?: [^\r\n]*)?", s
         ),
     )
     subprocess.run(["ssh-keygen", "-lf", "-"], input=(key + "\n").encode(), check=True)
-    return {
-        "domain": domain,
-        "port": port,
-        "node": node,
-        "agent": agent,
-        "admin_ip": admin_ip,
-        "ops": ops,
-        "key": key,
-    }
+    return key
 
 
 def password():
@@ -107,7 +116,10 @@ def unpack(archive, digest, stage):
     copy = stage.parent / "archive.tar.gz"
     shutil.copyfile(archive, copy)
     with copy.open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+        checksum = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            checksum.update(block)
+        if checksum.hexdigest() != digest:
             raise ValueError("归档 SHA-256 校验失败")
     with tarfile.open(copy, "r:gz") as bundle:
         for item in bundle:
