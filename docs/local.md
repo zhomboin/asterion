@@ -34,4 +34,4 @@
 
 ## 停止与下次使用
 
-在启动终端按 Ctrl+C。下次从同一目录运行 `bash start.sh`，使用原口令登录即可继续使用已有节点和历史记录。数据库在运行目录的 `.local/panel/`。升级时先退出程序，保留此目录，再解压新包。若要放在其他私有目录，每次启动时设置同一个 `ASTERION_LOCAL_DATA_DIR`。
+在启动终端按 Ctrl+C。下次从同一目录运行 `bash start.sh`，使用原口令登录即可继续使用已有节点和历史记录。数据库在运行目录的 `.local/panel/`。若要放在其他私有目录，每次启动时设置同一个 `ASTERION_LOCAL_DATA_DIR`。[本机运行包更新、备份与恢复](deployment.md)

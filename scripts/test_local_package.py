@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import secrets
 import select
 import signal
@@ -16,6 +17,20 @@ import tempfile
 import termios
 import time
 import urllib.request
+from urllib.parse import unquote, urlsplit
+
+
+def check_guides(work):
+    docs = work / "docs"
+    assert (docs / "local.md").is_file()
+    for guide in docs.glob("*.md"):
+        for link in re.findall(r"\]\(([^)\s]+)\)", guide.read_text(encoding="utf-8")):
+            target = urlsplit(link)
+            if not target.scheme and not target.netloc and target.path:
+                assert (guide.parent / unquote(target.path)).is_file(), (
+                    guide.name,
+                    link,
+                )
 
 
 def expect(fd, text):
@@ -92,6 +107,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(dir=".local") as tmp:
         work = Path(tmp).resolve()
         subprocess.run(["tar", "-xzf", sys.argv[1], "-C", work], check=True)
+        check_guides(work)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]

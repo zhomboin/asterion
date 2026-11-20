@@ -1,5 +1,0 @@
-[Service]
-LoadCredential=ssh.json:/etc/asterion/ssh/profiles.json
-LoadCredential=ssh.key:/etc/asterion/ssh/identity
-LoadCredential=known_hosts:/etc/asterion/ssh/known_hosts
-Environment=ASTERION_SSH_CONFIG_FILE=/run/credentials/%n/ssh.json

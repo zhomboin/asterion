@@ -49,12 +49,7 @@ impl Drop for Worker {
     }
 }
 
-pub async fn serve(
-    pool: SqlitePool,
-    bus: Arc<SshBus>,
-    mut shutdown: watch::Receiver<bool>,
-    local: bool,
-) {
+pub async fn serve(pool: SqlitePool, bus: Arc<SshBus>, mut shutdown: watch::Receiver<bool>) {
     let mut workers: HashMap<String, Worker> = HashMap::new();
     let slots = Arc::new(Semaphore::new(32));
     let mut tick = interval(Duration::from_secs(3));
@@ -64,7 +59,7 @@ pub async fn serve(
             _ = shutdown.changed() => break,
             _ = tick.tick() => {}
         }
-        let mut profiles = config::load(local).await.unwrap_or_default();
+        let mut profiles = config::load(true).await.unwrap_or_default();
         let Ok(nodes) = sqlx::query_as::<_, (String, String)>(
             "SELECT id, ssh_profile FROM nodes WHERE ssh_profile IS NOT NULL",
         )
@@ -73,13 +68,11 @@ pub async fn serve(
         else {
             continue;
         };
-        if local {
-            for (_, name) in &nodes {
-                if let Some(direct) = direct::Direct::parse(name) {
-                    profiles
-                        .entry(name.clone())
-                        .or_insert_with(|| Target::Direct(direct, Value::Null));
-                }
+        for (_, name) in &nodes {
+            if let Some(direct) = direct::Direct::parse(name) {
+                profiles
+                    .entry(name.clone())
+                    .or_insert_with(|| Target::Direct(direct, Value::Null));
             }
         }
         workers.retain(|id, worker| {

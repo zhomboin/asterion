@@ -74,7 +74,7 @@ function EntryForm({ entry, group, controls, terminal, nodeId, onExpired }: {
         const digest = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
         propose('save_reload', entry.path + ' → ' + entry.reload + ' ' + entry.unit, { digest }, text);
       } catch {
-        setError('无法校验配置摘要，请使用受信任的 HTTPS 连接。');
+        setError('无法校验配置摘要，请通过启动终端显示的本机地址打开面板并重试。');
       }
     }
     return <div className="fields detail-panel">
