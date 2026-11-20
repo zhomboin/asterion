@@ -50,17 +50,20 @@ def property_value(unit, name):
     ).stdout.strip()
 
 
-def check_unit(unit, source, known):
-    unit_path = UNITS / unit
+def check_unit(unit, source, known, *, template_unit=None):
+    unit_path = UNITS / (template_unit or unit)
     unit_file(unit_path, source.read_text(), inspect_only=True)
     fragment = property_value(unit, "FragmentPath")
     if fragment and Path(fragment) != unit_path:
         raise ValueError(f"{unit} 已由其他服务文件提供：{fragment}")
     overrides = set(map(Path, property_value(unit, "DropInPaths").split()))
     for base in (UNITS, RUNTIME):
-        directory = base / (unit + ".d")
-        if trusted(directory, directory=True):
-            overrides.update(directory.glob("*.conf"))
+        if template_unit and (base / unit).is_file():
+            raise ValueError(f"已有独立实例文件，请核对 {base / unit}")
+        for name in {unit, template_unit or unit}:
+            directory = base / (name + ".d")
+            if trusted(directory, directory=True):
+                overrides.update(directory.glob("*.conf"))
     for item in overrides:
         if item not in known:
             raise ValueError(f"已有自定义 systemd 配置，无法确认是否为标准服务：{item}")
@@ -69,11 +72,61 @@ def check_unit(unit, source, known):
 
 
 def agent_overrides():
-    return {
+    known = {
         ENROLL_CONF: template("enroll.conf"),
         UNITS / (AGENT + ".d/20-local.conf"): template("agent-local.conf"),
         DOCKER_CONF: template("docker-read.conf"),
+        UNITS / (AGENT + ".d/40-operations.conf"): template("operations.conf"),
+        **{
+            UNITS
+            / (
+                AGENT + f".d/45-managed-{kind}.conf"
+            ): f"[Service]\nSupplementaryGroups=asterion-ops-{kind}\n"
+            for kind in ("configs", "containers")
+        },
     }
+    # 手动部署可能用 systemctl edit 把授权组放在 override.conf，
+    # 或把它们附加到标准的 executor 凭据文件中。
+    directory = UNITS / (AGENT + ".d")
+    if trusted(directory, directory=True):
+        groups = {
+            "asterion-ops-configs",
+            "asterion-ops-containers",
+            "asterion-ops-packages",
+            "asterion-operators",
+            "asterion-readers",
+        }
+        for name in ("override.conf", "40-operations.conf"):
+            path = directory / name
+            if trusted(path):
+                text = path.read_text()
+                lines = [
+                    line.strip()
+                    for line in text.splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")
+                ]
+                base = (
+                    template("operations.conf").splitlines()
+                    if name.startswith("40")
+                    else ["[Service]"]
+                )
+                rest = [
+                    line
+                    for line in lines
+                    if not line.startswith("SupplementaryGroups=")
+                ]
+                memberships = [
+                    line.split("=", 1)[1].split()
+                    for line in lines
+                    if line.startswith("SupplementaryGroups=")
+                ]
+                if (
+                    lines[:1] == ["[Service]"]
+                    and rest == base
+                    and all(g and set(g) <= groups for g in memberships)
+                ):
+                    known[path] = text
+    return known
 
 
 def check_units(c, stage):

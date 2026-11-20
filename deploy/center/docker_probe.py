@@ -6,7 +6,7 @@ import sys
 import time
 
 
-def inventory(path):
+def query(path, request):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(10)
         for attempt in range(25):
@@ -17,12 +17,25 @@ def inventory(path):
                 if attempt == 24:
                     raise
                 time.sleep(0.2)
-        client.sendall(b'{"kind":"docker"}\n')
+        client.sendall(json.dumps(request).encode() + b"\n")
         with client.makefile("rb") as stream:
             line = stream.readline(256 * 1024)
         if not line.endswith(b"\n"):
             raise ValueError("读取服务返回的清单不完整")
         return json.loads(line)
+
+
+def inventory(path):
+    return query(path, {"kind": "docker"})
+
+
+def managed(path, keys):
+    if query(path, {"query": True}).get("result", {}).get("keys") != keys:
+        raise ValueError("操作服务尚未加载预期的授权清单")
+    for key in keys:
+        result = query(path, {"query": True, "key": key})
+        if result.get("result", {}).get("key") != key:
+            raise ValueError(f"操作服务无法读取授权目标 {key}，请核对文件或容器身份")
 
 
 def verify(path, state):
@@ -45,6 +58,9 @@ def verify(path, state):
 
 if __name__ == "__main__":
     try:
-        verify(sys.argv[1], sys.argv[2])
+        if sys.argv[2] == "managed":
+            managed(sys.argv[1], sys.argv[3:])
+        else:
+            verify(sys.argv[1], sys.argv[2])
     except (OSError, ValueError) as exc:
-        sys.exit(f"以 Agent 身份验收 Docker 只读采集失败：{exc}")
+        sys.exit(f"以 Agent 身份验收节点服务失败：{exc}")

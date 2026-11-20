@@ -5,6 +5,7 @@ deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
     echo '用法：bash deploy/install-center.sh [可信的 asterion-<构建编号>.tar.gz]'
     echo '已有中心可选择仅补配 Docker 只读采集，直接复用已安装的发布。'
+    echo '选择 4 可配置服务文件编辑与重启、Docker 容器启停及受管容器方案。'
     echo '以 root 或有 sudo 权限的普通用户运行。省略归档时先查找当前目录和家目录，找不到就从源码构建。'
     exit 0
 fi
@@ -31,12 +32,14 @@ if [[ -L /opt/asterion/current ]]; then
     echo '1) 仅配置本机 Docker 只读采集（自动检测，权限变更时重启本机 Agent）'
     echo '2) 继续完整中心部署'
     echo '3) 退出，保留当前配置'
+    echo '4) 配置服务文件编辑与重启、Docker 容器操作'
     while read -r -p '请选择 [3]：' action; do
         case ${action:-3} in
             1) exec "${installer[@]}" --docker-reader ;;
             2) break ;;
             3) exit 0 ;;
-            *) echo '请输入 1、2 或 3。' ;;
+            4) exec "${installer[@]}" --managed ;;
+            *) echo '请输入 1、2、3 或 4。' ;;
         esac
     done
     [[ ${action:-} == 2 ]] || exit 1

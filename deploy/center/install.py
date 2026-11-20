@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docker_reader
 import existing
 import host
+import managed_setup
 import pki
 import services
 from host import AGENT, CONFIG, SERVER, UNITS, put, run
@@ -236,6 +237,7 @@ def provision(archive):
             f"部署完成。面板 https://{c['domain']}/login，用户名 {existing.admin_name(services.DATABASE)}。"
         )
         docker_reader.configure(BASE, AGENT_BASE, AGENT_CONFIG)
+        managed_setup.configure(BASE, AGENT_BASE, AGENT_CONFIG)
 
 
 def main():
@@ -254,6 +256,8 @@ def main():
             sys.exit("另一个中心安装进程正在运行。")
         if sys.argv[1] == "--docker-reader":
             docker_reader.configure(BASE, AGENT_BASE, AGENT_CONFIG, selected=True)
+        elif sys.argv[1] == "--managed":
+            managed_setup.configure(BASE, AGENT_BASE, AGENT_CONFIG)
         else:
             provision(Path(sys.argv[1]))
 
@@ -264,6 +268,8 @@ if __name__ == "__main__":
     except (
         OSError,
         ValueError,
+        TypeError,
+        subprocess.TimeoutExpired,
         tarfile.TarError,
         sqlite3.Error,
         subprocess.CalledProcessError,

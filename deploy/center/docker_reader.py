@@ -102,7 +102,7 @@ def reader_group():
     return group.gr_gid
 
 
-def check_install(base, agent_base, config):
+def installed_release(base, agent_base, config):
     current = base / "current"
     if not current.is_symlink():
         raise ValueError("找不到中心的当前发布，请选择完整中心部署")
@@ -125,24 +125,29 @@ def check_install(base, agent_base, config):
         release,
     ):
         raise ValueError("本机 Agent 的发布链接与中心不一致，请核对现有配置")
+    if not existing.trusted(host.UNITS / host.AGENT) or not services.active(host.AGENT):
+        raise ValueError("中心本机 Agent 尚未运行，请选择完整中心部署")
+    if not existing.trusted(config / "agent.env", private=True):
+        raise ValueError("中心本机 Agent 缺少 agent.env，请选择完整中心部署")
+    services.check_unit(
+        host.AGENT, host.HERE.parent / host.AGENT, services.agent_overrides()
+    )
+    return release
+
+
+def check_install(base, agent_base, config):
+    release = installed_release(base, agent_base, config)
     binary = release / "bin/asterion-docker-reader"
     if not existing.trusted(binary) or not os.access(binary, os.X_OK):
         raise ValueError(
             "当前 Agent 发布缺少可执行的 Docker 读取程序，请按部署指南补齐发布"
         )
-    if not existing.trusted(host.UNITS / host.AGENT) or not services.active(host.AGENT):
-        raise ValueError("中心本机 Agent 尚未运行，请选择完整中心部署")
-    if not existing.trusted(config / "agent.env", private=True):
-        raise ValueError("中心本机 Agent 缺少 agent.env，请选择完整中心部署")
     if existing.env_values(config / "agent.env").get(VARIABLE, SOCKET) != SOCKET:
         raise ValueError("agent.env 已指定其他 Docker 读取端点，请核对现有配置")
-    services.check_unit(
-        host.AGENT, host.HERE.parent / host.AGENT, services.agent_overrides()
-    )
     services.check_unit(UNIT, host.HERE.parent / UNIT, {})
 
 
-def agent_access(reader_gid):
+def process_access(required_groups, variable, value):
     pid = services.property_value(host.AGENT, "MainPID")
     if not pid.isdecimal() or int(pid) == 0:
         return None
@@ -157,9 +162,17 @@ def agent_access(reader_gid):
     uid = int(fields["Uid"].split()[1])
     gid = int(fields["Gid"].split()[1])
     groups = list(map(int, fields["Groups"].split()))
-    if uid and reader_gid in groups and f"{VARIABLE}={SOCKET}".encode() in env:
+    if (
+        uid
+        and set(required_groups) <= set(groups)
+        and f"{variable}={value}".encode() in env
+    ):
         return {"user": uid, "group": gid, "extra_groups": groups}
     return None
+
+
+def agent_access(reader_gid):
+    return process_access([reader_gid], VARIABLE, SOCKET)
 
 
 def configure(base, agent_base, config, *, selected=False):

@@ -204,7 +204,10 @@ cargo +stable run --locked -p asterion-agent
 bash -n deploy/install-center.sh
 bash -n deploy/build-release.sh
 python3 -B -m unittest discover -s deploy/center -v
+python3 -B -m unittest discover -s deploy/managed -v
 ```
+
+节点操作向导的隔离测试覆盖授权选择、目标绑定、策略合并和冲突处理。双版本 CI 从已有中心交互补配后，通过面板 API 读取授权文件及容器，并验证写入测试配置、重启对应 Unit 和重复运行时的服务状态。
 
 根据改动范围运行对应检查。提交前格式化改动，完整检查在 GitHub Actions 运行。
 
