@@ -7,9 +7,9 @@ use axum::{Extension, Json, Router};
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
-use crate::agent_bus::AgentBus;
 use crate::auth::AdminSession;
 use crate::monitor::{ApiError, bus_error, ensure_node};
+use crate::ssh_bus::SshBus;
 
 pub fn routes() -> Router<SqlitePool> {
     Router::new()
@@ -20,7 +20,7 @@ pub fn routes() -> Router<SqlitePool> {
 async fn accounts(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(node): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     ensure_node(&pool, &node).await?;
@@ -33,7 +33,7 @@ async fn accounts(
 async fn keys(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path((node, username)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
     if !valid_username(&username) {

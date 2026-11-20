@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use asterion_server::{agent_bus::AgentBus, alerts, assets, database, monitor, operations, trends};
+use asterion_server::{alerts, assets, database, monitor, operations, ssh_bus::SshBus, trends};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
@@ -18,7 +18,7 @@ async fn fixture() -> (SqlitePool, Router, String, String) {
         .merge(alerts::routes())
         .merge(trends::routes())
         .with_state(pool.clone())
-        .layer(axum::Extension(Arc::new(AgentBus::new(15))));
+        .layer(axum::Extension(Arc::new(SshBus::new(15))));
     let node = new_id();
     sqlx::query("INSERT INTO panel_admin (id, username, password_hash) VALUES (1, 'test', 'unused-in-test')")
         .execute(&pool)
@@ -294,7 +294,7 @@ async fn operation_confirmation_is_single_use_and_bound_to_the_panel_session() {
     })
     .await
     .unwrap();
-    assert_eq!(finished["error_code"], "agent_offline");
+    assert_eq!(finished["error_code"], "ssh_offline");
     assert!(finished["started_at"].is_null());
     assert!(
         !finished["audit"]

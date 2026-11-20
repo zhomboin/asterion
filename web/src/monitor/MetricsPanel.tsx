@@ -29,7 +29,7 @@ export function MetricsPanel({ base, onExpired }: { base: string; onExpired: () 
       {(range === '7d' || range === '30d') && <LongTrends base={base} range={range} onExpired={onExpired} />}
       {shortRange && last && (
         <>
-          <p className="observation">来源 · Agent · 最近采样 <Timestamp value={last.sample.captured_at} /> · 中心接收 <Timestamp value={last.observed_at} /></p>
+          <p className="observation">来源 · SSH · 最近采样 <Timestamp value={last.sample.captured_at} /> · 中心接收 <Timestamp value={last.observed_at} /></p>
           {history.data?.truncated && <p className="observation">较早的指标采样已截断</p>}
           <MetricFacts sample={last.sample} />
           <Trend samples={samples} range={shortRange} interval={history.data?.interval_seconds} bucket={history.data?.bucket_seconds} />

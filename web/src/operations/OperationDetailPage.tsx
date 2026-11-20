@@ -11,11 +11,11 @@ const auditLabels: Record<string, string> = {
 };
 
 const accountErrors: Record<string, string> = {
-  agent_invalid_change: '配置校验未通过，或参数不在节点允许范围内。',
-  agent_target_changed: '目标或配置已变化，请重新读取后确认。',
-  agent_busy: '节点正在处理其他任务，请稍后重新核对状态。',
-  agent_account_conflict: '账号、家目录或公钥已存在，或授权文件已变化。请刷新后核对。',
-  agent_account_not_found: '节点上找不到所需的账号、目录或公钥。',
+  ssh_invalid_change: '配置校验未通过，或参数不在节点允许范围内。',
+  ssh_target_changed: '目标或配置已变化，请重新读取后确认。',
+  ssh_busy: '节点正在处理其他任务，请稍后重新核对状态。',
+  ssh_account_conflict: '账号、家目录或公钥已存在，或授权文件已变化。请刷新后核对。',
+  ssh_account_not_found: '节点上找不到所需的账号、目录或公钥。',
 };
 
 export function OperationDetailPage({ id, onExpired }: { id: string; onExpired: () => void }) {
@@ -26,7 +26,7 @@ export function OperationDetailPage({ id, onExpired }: { id: string; onExpired: 
   const [error, setError] = useState('');
   const job = resource.data;
   const cancellable = job?.can_cancel === true && !resource.error;
-  const accountError = job?.error_code ? accountErrors[job.error_code] : undefined;
+  const accountError = job?.error_code ? accountErrors[job.error_code.replace(/^agent_/u, 'ssh_')] : undefined;
 
   async function cancel() {
     setError('');

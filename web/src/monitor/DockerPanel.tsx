@@ -11,7 +11,7 @@ const statusText = {
   available: '可用',
   disabled: '未启用 Docker 采集',
   not_installed: '未发现 Docker Engine',
-  permission_denied: 'Agent 无权读取 Docker 接口',
+  permission_denied: 'SSH 账号无权读取 Docker 接口',
   unreachable: 'Docker Engine 不可达',
 };
 
@@ -35,7 +35,7 @@ export function DockerPanel({ base, online, onExpired, operations }: {
       <h2>已纳管容器</h2>
       <button type="button" className="primary" disabled={!online} onClick={() => setAdding(true)}>添加监控</button>
     </div>
-    {!online && <p className="observation">Agent 未连接，实时状态不可用</p>}
+    {!online && <p className="observation">SSH 未连接，实时状态不可用</p>}
     {list.registry.loading && <p role="status">正在读取纳管清单…</p>}
     {list.registry.error && <Problem error={list.registry.error} retry={list.refresh} />}
     {list.snapshot.error && <Problem error={list.snapshot.error} retry={list.refresh} />}

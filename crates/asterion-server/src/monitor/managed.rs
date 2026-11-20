@@ -11,8 +11,8 @@ use sqlx::SqlitePool;
 
 use super::queries::{bus_error, is_container_id};
 use super::{ApiError, ensure_node};
-use crate::agent_bus::AgentBus;
 use crate::auth::{AdminSession, Csrf};
+use crate::ssh_bus::SshBus;
 
 const PAGE_SIZE: usize = 12;
 const CHANGED: ApiError = ApiError::new(
@@ -120,7 +120,7 @@ async fn list(
 async fn live(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path((id, kind)): Path<(String, Kind)>,
     query: Result<Query<PageQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -176,7 +176,7 @@ async fn add(
     _: Csrf,
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path((id, kind)): Path<(String, Kind)>,
     body: Result<Json<Target>, JsonRejection>,
 ) -> Result<Json<Resource>, ApiError> {

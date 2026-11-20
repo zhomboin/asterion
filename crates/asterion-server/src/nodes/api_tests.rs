@@ -1,4 +1,4 @@
-use asterion_protocol::{is_node_id, is_token};
+use asterion_protocol::is_node_id;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use tower::ServiceExt;
 
 use super::credentials;
-use crate::{agent_bus::AgentBus, app, database};
+use crate::{app, database, ssh_bus::SshBus};
 
 async fn request(
     router: &Router,
@@ -87,51 +87,16 @@ async fn node_management_requires_a_session_and_preserves_partial_updates() {
         pool.clone(),
         None,
         shutdown_receiver,
-        AgentBus::new(15).into(),
+        SshBus::new(15).into(),
     );
 
     let unauthenticated = request(&router, "GET", "/api/v1/nodes", None, false, Value::Null).await;
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
     let session = admin_cookie(&pool, &router).await;
     let cookie = Some(session.as_str());
-    assert_eq!(
-        request(
-            &router,
-            "GET",
-            "/api/v1/nodes/ssh/capability",
-            None,
-            false,
-            Value::Null
-        )
-        .await
-        .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        request(
-            &router,
-            "GET",
-            "/api/v1/nodes/ssh/capability",
-            cookie,
-            false,
-            Value::Null
-        )
-        .await
-        .status(),
-        StatusCode::OK
-    );
-    for operation in ["inspect", "deploy"] {
-        let path = format!("/api/v1/nodes/ssh/{operation}");
-        assert_eq!(
-            request(&router, "POST", &path, cookie, false, json!({}))
-                .await
-                .status(),
-            StatusCode::FORBIDDEN
-        );
-    }
-    let node = json!({"name": "工作节点", "kind": "wsl", "tags": ["测试"], "notes": "测试节点"});
+    let node = json!({"ssh_profile":"fixture","name": "工作节点", "kind": "wsl", "tags": ["测试"], "notes": "测试节点"});
 
-    let path = "/api/v1/nodes/enrollment-token";
+    let path = "/api/v1/nodes";
     let csrf_rejected = request(&router, "POST", path, cookie, false, node.clone()).await;
     assert_eq!(csrf_rejected.status(), StatusCode::FORBIDDEN);
     let created = response_json(
@@ -139,10 +104,9 @@ async fn node_management_requires_a_session_and_preserves_partial_updates() {
         StatusCode::CREATED,
     )
     .await;
-    let id = created["node_id"].as_str().unwrap();
-    let token = created["token"].as_str().unwrap();
+    let id = created["id"].as_str().unwrap();
+    assert!(created.get("token").is_none());
     assert!(is_node_id(id));
-    assert!(is_token(token));
 
     let node_path = format!("/api/v1/nodes/{id}");
     let patched = response_json(
@@ -210,7 +174,7 @@ async fn list_combines_name_tag_and_status_before_pagination() {
         pool.clone(),
         None,
         shutdown_receiver,
-        AgentBus::new(15).into(),
+        SshBus::new(15).into(),
     );
     let session = admin_cookie(&pool, &router).await;
     let cookie = Some(session.as_str());
@@ -224,6 +188,11 @@ async fn list_combines_name_tag_and_status_before_pagination() {
     .execute(&pool)
     .await
     .unwrap();
+
+    sqlx::query("UPDATE nodes SET ssh_online_until = last_seen_at")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let page = response_json(
         request(
@@ -262,7 +231,7 @@ async fn list_includes_latest_metrics_per_node_when_requested() {
         pool.clone(),
         None,
         shutdown_receiver,
-        AgentBus::new(15).into(),
+        SshBus::new(15).into(),
     );
     let session = admin_cookie(&pool, &router).await;
     let cookie = Some(session.as_str());
@@ -308,13 +277,7 @@ async fn list_includes_latest_metrics_per_node_when_requested() {
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO agent_credentials (fingerprint, node_id, created_at, connection_generation)
-         VALUES (zeroblob(32), 'dev-1', unixepoch(), 1)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE nodes SET ssh_online_until = CASE WHEN id = 'dev-1' THEN unixepoch()+60 ELSE 0 END WHERE id != 'dev-2'").execute(&pool).await.unwrap();
     let list = |path| request(&router, "GET", path, cookie, false, Value::Null);
     let result = response_json(list("/api/v1/nodes?metrics=true").await, StatusCode::OK).await;
     assert_eq!(
@@ -349,7 +312,7 @@ async fn nodes_can_share_preserve_and_clear_host_binding() {
         pool.clone(),
         None,
         shutdown_receiver,
-        AgentBus::new(15).into(),
+        SshBus::new(15).into(),
     );
     let session = admin_cookie(&pool, &router).await;
     let cookie = Some(session.as_str());
@@ -358,16 +321,16 @@ async fn nodes_can_share_preserve_and_clear_host_binding() {
         request(
             &router,
             "POST",
-            "/api/v1/nodes/enrollment-token",
+            "/api/v1/nodes",
             cookie,
             true,
-            json!({"name": node, "kind": "wsl", "host_name": host}),
+            json!({"ssh_profile":"fixture","name": node, "kind": "wsl", "host_name": host}),
         )
     };
     let first = response_json(create("Dist 1", " Twin ").await, StatusCode::CREATED).await;
     let second = response_json(create("Dist 2", "Twin").await, StatusCode::CREATED).await;
-    let first_path = format!("/api/v1/nodes/{}", first["node_id"].as_str().unwrap());
-    let second_path = format!("/api/v1/nodes/{}", second["node_id"].as_str().unwrap());
+    let first_path = format!("/api/v1/nodes/{}", first["id"].as_str().unwrap());
+    let second_path = format!("/api/v1/nodes/{}", second["id"].as_str().unwrap());
     let get = |path| request(&router, "GET", path, cookie, false, Value::Null);
     let first = response_json(get(&first_path).await, StatusCode::OK).await;
     let second = response_json(get(&second_path).await, StatusCode::OK).await;

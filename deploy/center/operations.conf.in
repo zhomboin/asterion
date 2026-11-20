@@ -1,3 +1,0 @@
-[Service]
-LoadCredential=executor.json:/etc/asterion-agent/executor.json
-Environment=ASTERION_EXECUTOR_CONFIG_FILE=/run/credentials/%n/executor.json

@@ -13,9 +13,9 @@ use sqlx::{Executor, Sqlite, SqlitePool};
 
 use super::error::{ConfirmError, INVALID_CONFIRMATION, LIMIT_REACHED, NOT_FOUND, bus_error};
 use super::{run, storage};
-use crate::agent_bus::AgentBus;
 use crate::auth::{AdminSession, AuthError, Csrf, verify_step_up};
 use crate::monitor::ApiError;
+use crate::ssh_bus::SshBus;
 
 const CONFIRMATION_SECS: i64 = 120;
 const MAX_PREPARED_PER_SESSION: i64 = 16;
@@ -29,7 +29,7 @@ pub(super) struct Selection {
 pub(super) async fn managed(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path((node, group)): Path<(String, String)>,
     axum::extract::Query(selection): axum::extract::Query<Selection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -64,7 +64,7 @@ pub(super) struct Preparation {
 pub(super) async fn catalog(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(node): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     node_name(&pool, &node).await?;
@@ -147,7 +147,7 @@ pub(super) async fn confirm(
     _: Csrf,
     session: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(id): Path<String>,
     body: Result<Json<Confirmation>, JsonRejection>,
 ) -> Result<StatusCode, ConfirmError> {
@@ -296,7 +296,7 @@ pub(super) async fn cancel(
     _: Csrf,
     session: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     if !is_node_id(&id) {

@@ -12,20 +12,20 @@ import type { ServiceMonitor } from './serviceMonitoring';
 const statusText = {
   available: '可用',
   unavailable: 'systemd 未启用或不可用',
-  permission_denied: 'Agent 无权读取 systemd',
+  permission_denied: 'SSH 账号无权读取 systemd',
   error: 'systemd 查询失败',
 };
 
 const liveUnavailableText = {
   online: undefined,
-  pending: 'Agent 尚未连接',
-  offline: 'Agent 离线',
+  pending: 'SSH 尚未连接',
+  offline: 'SSH 离线',
   unknown: '节点状态未更新',
 };
 
-export function SystemdPanel({ base, agentState, initialUnit, onExpired, operations }: {
+export function SystemdPanel({ base, connectionState, initialUnit, onExpired, operations }: {
   base: string;
-  agentState: Node['status'] | 'unknown';
+  connectionState: Node['status'] | 'unknown';
   initialUnit?: string;
   onExpired: () => void;
   operations?: NodeOperations;
@@ -36,7 +36,7 @@ export function SystemdPanel({ base, agentState, initialUnit, onExpired, operati
   const opener = useRef<HTMLButtonElement>(null);
   const detailTitle = useRef<HTMLHeadingElement>(null);
   const monitorListTitle = useRef<HTMLHeadingElement>(null);
-  const online = agentState === 'online';
+  const online = connectionState === 'online';
   const path = base + '/systemd/services';
   const detail = useResource<Unit>(online && selected ? path + '/' + encodeURIComponent(selected) : null, onExpired);
   const monitorPath = base + '/service-monitors';
@@ -44,7 +44,7 @@ export function SystemdPanel({ base, agentState, initialUnit, onExpired, operati
   const monitor = monitors.data?.monitors.find((service) => service.unit === selected);
   const exactUnit = detail.data?.verified && detail.data.name === selected;
   const ready = Boolean(monitors.data && !monitors.error && (monitor || exactUnit));
-  const liveUnavailable = liveUnavailableText[agentState];
+  const liveUnavailable = liveUnavailableText[connectionState];
   const unavailable = liveUnavailable ?? (monitors.error ? '监控状态未更新' : undefined);
 
   useEffect(() => {

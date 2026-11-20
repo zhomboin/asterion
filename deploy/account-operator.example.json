@@ -1,5 +1,0 @@
-{
-  "usernames": ["<允许管理的普通用户名>"],
-  "groups": ["<允许变更的普通补充组名>"],
-  "backup_dir": "/var/lib/asterion-account-operator/backups"
-}

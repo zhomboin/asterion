@@ -7,17 +7,12 @@ use serde_json::Value;
 use sqlx::{SqliteConnection, SqlitePool};
 
 use super::storage;
-use crate::agent_bus::{AgentBus, BusError, PendingTask};
+use crate::ssh_bus::{BusError, PendingTask, SshBus};
 
 const DEADLINE: Duration = Duration::from_secs(75);
 const OUTPUT_BYTES: usize = 32 * 1024;
 
-pub(super) async fn execute(
-    pool: SqlitePool,
-    bus: Arc<AgentBus>,
-    node: String,
-    task: OperationTask,
-) {
+pub(super) async fn execute(pool: SqlitePool, bus: Arc<SshBus>, node: String, task: OperationTask) {
     let id = task.task_id.clone();
     let account_change = matches!(task.action, OperationAction::Account { .. });
     let finished = match dispatch(&pool, &bus, &node, task).await {
@@ -94,7 +89,7 @@ async fn save_progress(pool: &SqlitePool, id: &str, mut output: String, mut trun
 
 async fn dispatch(
     pool: &SqlitePool,
-    bus: &AgentBus,
+    bus: &SshBus,
     node: &str,
     task: OperationTask,
 ) -> Result<Option<Result<PendingTask, BusError>>, sqlx::Error> {
@@ -121,7 +116,7 @@ async fn dispatch(
         tx.commit().await?;
         return Ok(None);
     }
-    // 取消与下发通过任务事务保持顺序。未进入 Agent 队列时不记录任务启动。
+    // 取消与下发通过任务事务保持顺序。未进入 SSH 队列时不记录任务启动。
     let pending = match bus.enqueue(node, &id, "operation_execute", payload, deadline) {
         Ok(pending) => pending,
         Err(error) => {
@@ -166,7 +161,7 @@ impl Outcome {
 
     fn from_output(value: Value) -> Self {
         let Ok(mut output) = serde_json::from_value::<Output>(value) else {
-            return Self::with_error("interrupted", "agent_invalid_result");
+            return Self::with_error("interrupted", "ssh_invalid_result");
         };
         clamp_output(&mut output.output, &mut output.truncated);
         let succeeded = output.exit_code == Some(0);
@@ -182,28 +177,26 @@ impl Outcome {
 
     fn from_error(error: BusError, account_change: bool) -> Self {
         match error {
-            BusError::Timeout => Self::with_error("timed_out", "agent_timeout"),
-            BusError::Offline => Self::with_error("disconnected", "agent_offline"),
-            BusError::Busy => Self::with_error("failed", "agent_busy"),
-            BusError::Unsupported => Self::with_error("failed", "agent_upgrade_required"),
+            BusError::Timeout => Self::with_error("timed_out", "ssh_timeout"),
+            BusError::Offline => Self::with_error("disconnected", "ssh_offline"),
+            BusError::Busy => Self::with_error("failed", "ssh_busy"),
+            BusError::Unsupported => Self::with_error("failed", "ssh_unavailable"),
             BusError::Rejected { code, .. } => match code.as_str() {
                 "cancelled" => Self::with_error("cancelled", "operator_cancelled"),
-                "timeout" | "timed_out" => Self::with_error("timed_out", "agent_timeout"),
+                "timeout" | "timed_out" => Self::with_error("timed_out", "ssh_timeout"),
                 "forbidden" | "permission_denied" | "operation_denied" => {
-                    Self::with_error("failed", "agent_permission_denied")
+                    Self::with_error("failed", "ssh_permission_denied")
                 }
                 "target_changed" | "target_mismatch" => {
-                    Self::with_error("failed", "agent_target_changed")
+                    Self::with_error("failed", "ssh_target_changed")
                 }
-                "invalid_argument" => Self::with_error("failed", "agent_invalid_change"),
-                "agent_busy" => Self::with_error("failed", "agent_busy"),
-                "conflict" if account_change => {
-                    Self::with_error("failed", "agent_account_conflict")
-                }
+                "invalid_argument" => Self::with_error("failed", "ssh_invalid_change"),
+                "ssh_busy" => Self::with_error("failed", "ssh_busy"),
+                "conflict" if account_change => Self::with_error("failed", "ssh_account_conflict"),
                 "not_found" if account_change => {
-                    Self::with_error("failed", "agent_account_not_found")
+                    Self::with_error("failed", "ssh_account_not_found")
                 }
-                _ => Self::with_error("failed", "agent_operation_rejected"),
+                _ => Self::with_error("failed", "ssh_operation_rejected"),
             },
         }
     }
@@ -256,16 +249,16 @@ async fn finish_in_transaction(
 
 #[cfg(test)]
 mod tests {
-    use asterion_protocol::{AgentReply, TaskProgress};
+    use asterion_protocol::{TaskProgress, TaskReply};
 
     use super::*;
-    use crate::agent_bus::Control;
+    use crate::ssh_bus::Control;
 
     #[test]
     fn account_rejections_preserve_safe_error_codes() {
         for (code, expected) in [
-            ("conflict", "agent_account_conflict"),
-            ("not_found", "agent_account_not_found"),
+            ("conflict", "ssh_account_conflict"),
+            ("not_found", "ssh_account_not_found"),
         ] {
             let rejection = || BusError::Rejected {
                 code: code.into(),
@@ -277,7 +270,7 @@ mod tests {
             assert!(account.output.is_none());
             assert_eq!(
                 Outcome::from_error(rejection(), false).error_code,
-                Some("agent_operation_rejected")
+                Some("ssh_operation_rejected")
             );
         }
     }
@@ -302,7 +295,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let bus = Arc::new(AgentBus::new(15));
+        let bus = Arc::new(SshBus::new(15));
         let mut agent = bus.attach(&node, true);
         let simulate = async {
             let Control::Task(dispatch) = agent.next().await else {
@@ -330,7 +323,7 @@ mod tests {
             }
             dispatch
                 .response
-                .send(AgentReply::failure("timeout", "fixture"))
+                .send(TaskReply::failure("timeout", "fixture"))
                 .unwrap();
         };
 

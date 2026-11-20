@@ -15,7 +15,7 @@ use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use crate::agent_bus::AgentBus;
+use crate::ssh_bus::SshBus;
 use crate::terminal::TerminalHub;
 
 use self::rate::LoginThrottle;
@@ -120,7 +120,7 @@ async fn logout(
     _: Csrf,
     State(pool): State<SqlitePool>,
     terminals: Option<Extension<Arc<TerminalHub>>>,
-    bus: Option<Extension<Arc<AgentBus>>>,
+    bus: Option<Extension<Arc<SshBus>>>,
     headers: HeaderMap,
 ) -> Result<Response, AuthError> {
     if let Some(hash) = session_hash(&headers) {

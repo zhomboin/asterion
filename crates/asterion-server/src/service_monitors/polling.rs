@@ -8,13 +8,13 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use super::storage::{self, Observation};
-use crate::agent_bus::{AgentBus, BusError};
+use crate::ssh_bus::{BusError, SshBus};
 
 const MAX_PARALLEL_NODES: i64 = 8;
 const CHECKS_PER_NODE: i64 = 8;
 const SOFT_BATCH_BUDGET: Duration = Duration::from_secs(5);
 
-pub async fn poll_due(pool: &SqlitePool, bus: &Arc<AgentBus>) -> anyhow::Result<()> {
+pub async fn poll_due(pool: &SqlitePool, bus: &Arc<SshBus>) -> anyhow::Result<()> {
     let mut by_node = BTreeMap::<_, Vec<_>>::new();
     for monitor in storage::due(pool, MAX_PARALLEL_NODES, CHECKS_PER_NODE).await? {
         by_node
@@ -27,7 +27,7 @@ pub async fn poll_due(pool: &SqlitePool, bus: &Arc<AgentBus>) -> anyhow::Result<
         let pool = pool.clone();
         let bus = Arc::clone(bus);
         jobs.spawn(async move {
-            // Agent 的采集器每次只执行一个查询，避免轮询独占同节点的工作槽。
+            // SSH 的采集器每次只执行一个查询，避免轮询独占同节点的工作槽。
             let deadline = Instant::now() + SOFT_BATCH_BUDGET;
             for monitor in monitors {
                 let outcome = bus

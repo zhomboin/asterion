@@ -5,7 +5,6 @@ import hashlib
 import ipaddress
 import re
 import shutil
-import subprocess
 import tarfile
 from pathlib import Path, PurePosixPath
 
@@ -48,33 +47,16 @@ def settings(known=None):
         lambda s: re.fullmatch(r"[1-9][0-9]{4}", s) and int(s) <= 65535,
         "18080",
     )
-    node = known.get("node")
-    if node is None:
-        node = ask(
-            "允许 SSH 部署的节点 IPv4（只部署中心可留空）", lambda s: not s or ipv4(s)
-        )
     ops = ask(
-        "复用或新建的个人 Linux 运维用户名",
+        "面板管理员名称前缀",
         lambda s: re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", s),
         known.get("ops", ""),
     )
     return {
         "domain": domain,
         "port": port,
-        "node": node,
         "ops": ops,
     }
-
-
-def public_key():
-    key = ask(
-        "运维账号的 SSH 公钥",
-        lambda s: re.fullmatch(
-            r"(?:ssh-|ecdsa-|sk-)[\w@.-]+ [A-Za-z0-9+/=]+(?: [^\r\n]*)?", s
-        ),
-    )
-    subprocess.run(["ssh-keygen", "-lf", "-"], input=(key + "\n").encode(), check=True)
-    return key
 
 
 def password():
@@ -136,13 +118,10 @@ def unpack(archive, digest, stage):
                 raise ValueError("归档含链接或特殊文件")
     required = (
         "bin/asterion-server",
-        "bin/asterion-agent",
         "web/index.html",
         "deploy/asterion-server.service",
-        "deploy/asterion-agent.service",
-        "deploy/self_monitor.py",
     )
     if not all(
         (stage / name).is_file() and (stage / name).stat().st_size for name in required
     ):
-        raise ValueError("发布包缺少中心、面板或自监控所需的文件")
+        raise ValueError("发布包缺少中心或面板所需的文件")

@@ -1,14 +1,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use asterion_protocol::AgentReply;
+use asterion_protocol::TaskReply;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use super::polling::{interpret, poll_due};
 use super::storage::{DueMonitor, Observation, disable, due, enable, history, list, purge, record};
-use crate::agent_bus::{AgentBus, BusError, Control};
 use crate::database;
+use crate::ssh_bus::{BusError, Control, SshBus};
 
 const NODE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OTHER_NODE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -81,7 +81,7 @@ fn only_verified_exact_units_confirm_service_status() {
 #[tokio::test]
 async fn scheduler_records_down_and_recovery_without_resolving_on_agent_loss() {
     let pool = pool().await;
-    let bus = Arc::new(AgentBus::new(15));
+    let bus = Arc::new(SshBus::new(15));
     enable(&pool, NODE, UNIT).await.unwrap();
     assert_eq!(list(&pool, NODE).await.unwrap()[0].status, "pending");
     let mut agent = bus.attach(NODE, true);
@@ -97,7 +97,7 @@ async fn scheduler_records_down_and_recovery_without_resolving_on_agent_loss() {
             assert_eq!(&task.request.kind, "systemd_service");
             assert_eq!(task.request.args, json!({"unit": UNIT}));
             task.response
-                .send(AgentReply::Success {
+                .send(TaskReply::Success {
                     value: reply(UNIT, active, "failed"),
                 })
                 .unwrap();
@@ -125,7 +125,7 @@ async fn scheduler_records_down_and_recovery_without_resolving_on_agent_loss() {
             panic!("expected the systemd read request");
         };
         task.response
-            .send(AgentReply::Success {
+            .send(TaskReply::Success {
                 value: reply(UNIT, "active", "running"),
             })
             .unwrap();

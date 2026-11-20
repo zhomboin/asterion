@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use asterion_server::{agent_bus::AgentBus, app, database};
+use asterion_server::{app, database, ssh_bus::SshBus};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use serde_json::json;
@@ -10,7 +10,7 @@ use tower::ServiceExt;
 async fn health_reports_the_database_state() {
     let pool = database::connect("sqlite::memory:").await.unwrap();
     let (_stopping, shutdown) = tokio::sync::watch::channel(false);
-    let router = app::router(pool.clone(), None, shutdown, Arc::new(AgentBus::new(15)));
+    let router = app::router(pool.clone(), None, shutdown, Arc::new(SshBus::new(15)));
     let response = router
         .clone()
         .oneshot(

@@ -44,7 +44,6 @@ pub struct Node {
     pub os: Option<String>,
     pub arch: Option<String>,
     pub wsl_distro: Option<String>,
-    pub agent_version: Option<String>,
     pub tags: Vec<String>,
     pub notes: String,
     pub last_seen_at: Option<i64>,

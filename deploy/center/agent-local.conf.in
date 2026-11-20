@@ -1,6 +1,0 @@
-[Unit]
-Wants=asterion-server.service
-After=asterion-server.service
-[Service]
-LoadCredential=ca.pem:/etc/asterion/deploy-ca.crt
-Environment=ASTERION_AGENT_CA_FILE=/run/credentials/%n/ca.pem

@@ -40,7 +40,7 @@ export type Discovery = {
   resource_id: string;
   name: string;
   observed_at: number;
-  source: 'agent';
+  source: 'agent' | 'ssh';
 };
 
 export type Binding = Discovery & { bound_at: number };

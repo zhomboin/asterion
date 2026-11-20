@@ -5,8 +5,8 @@ use axum::{Extension, Json, Router};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::agent_bus::AgentBus;
 use crate::auth::AdminSession;
+use crate::ssh_bus::SshBus;
 
 pub fn routes() -> Router<SqlitePool> {
     Router::new().route("/api/v1/settings", get(current))
@@ -20,7 +20,7 @@ struct Settings {
     terminal_enabled: bool,
 }
 
-async fn current(_: AdminSession, Extension(bus): Extension<Arc<AgentBus>>) -> Json<Settings> {
+async fn current(_: AdminSession, Extension(bus): Extension<Arc<SshBus>>) -> Json<Settings> {
     let (metric_retention_days, trend_retention_days) = bus.retention_days();
     Json(Settings {
         sample_interval_secs: bus.sample_interval_secs(),

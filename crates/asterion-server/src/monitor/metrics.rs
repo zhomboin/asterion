@@ -9,8 +9,8 @@ use serde_json::Value;
 use sqlx::{SqliteConnection, SqlitePool};
 
 use super::ApiError;
-use crate::agent_bus::AgentBus;
 use crate::auth::AdminSession;
+use crate::ssh_bus::SshBus;
 
 const WRITE_MIN_SECONDS: i64 = 5;
 const MAX_SAMPLE_BYTES: usize = 48 * 1024;
@@ -52,6 +52,10 @@ pub async fn purge_metrics(pool: &SqlitePool, retention_seconds: i64) -> Result<
         .execute(pool)
         .await?;
     Ok(result.rows_affected())
+}
+
+pub(crate) fn valid_sample(value: &Value) -> bool {
+    metrics_sample(value).is_some()
 }
 
 fn metrics_sample(sample: &Value) -> Option<String> {
@@ -168,7 +172,7 @@ struct ObservedSample {
 pub(crate) async fn history(
     _: AdminSession,
     State(pool): State<SqlitePool>,
-    Extension(bus): Extension<Arc<AgentBus>>,
+    Extension(bus): Extension<Arc<SshBus>>,
     Path(node_id): Path<String>,
     query: Result<Query<HistoryQuery>, QueryRejection>,
 ) -> Result<Json<History>, ApiError> {
