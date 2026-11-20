@@ -1,5 +1,6 @@
 """在一次性目录中测试解压、首次口令、登录和再次启动。"""
 
+import errno
 import fcntl
 import http.cookiejar
 import json
@@ -18,6 +19,8 @@ import termios
 import time
 import urllib.request
 from urllib.parse import unquote, urlsplit
+
+DEFAULT_PORT = 17110
 
 
 def check_guides(work):
@@ -52,13 +55,16 @@ def check(work, port, password, first):
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
     env = {k: v for k, v in os.environ.items() if not k.startswith("ASTERION_")}
+    env["PATH"] = "/usr/bin:/bin"
+    if port is not None:
+        env["ASTERION_LOCAL_PORT"] = str(port)
     process = subprocess.Popen(
         ["bash", "start.sh"],
         cwd=work,
         stdin=slave,
         stdout=slave,
         stderr=slave,
-        env={**env, "PATH": "/usr/bin:/bin", "ASTERION_LOCAL_PORT": str(port)},
+        env=env,
         preexec_fn=terminal,
     )
     os.close(slave)
@@ -67,8 +73,8 @@ def check(work, port, password, first):
             for prompt in ("请设置本机面板口令", "请再次输入口令"):
                 expect(master, prompt)
                 os.write(master, (password + "\n").encode())
-        expect(master, "Ctrl+C 退出")
-        base = f"http://127.0.0.1:{port}"
+        base = f"http://127.0.0.1:{DEFAULT_PORT if port is None else port}"
+        expect(master, f"本地面板 {base} （Ctrl+C 退出）")
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
             urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
@@ -111,7 +117,16 @@ if __name__ == "__main__":
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
+        first_port = None
+        with socket.socket() as sock:
+            try:
+                sock.bind(("127.0.0.1", DEFAULT_PORT))
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                print(f"默认端口 {DEFAULT_PORT} 已占用，本次仅验证自定义端口")
+                first_port = port
         password = secrets.token_hex(16)
-        check(work, port, password, True)
+        check(work, first_port, password, True)
         check(work, port, password, False)
     print("已验证解压运行、首次口令、登录、停止及重启")

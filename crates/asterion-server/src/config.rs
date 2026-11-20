@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, ensure};
 
 pub const DEFAULT_DATABASE_URL: &str = "sqlite://.local/asterion.db";
-const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:8080";
+const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:17110";
 
 pub struct Config {
     pub listen_addr: SocketAddr,

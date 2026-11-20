@@ -13,7 +13,7 @@
    ssh -V
    ```
 
-2. 启动面板。脚本准备前端依赖，构建网页和 Rust 程序，并在回环地址开始监听。
+2. 启动面板。脚本准备前端依赖，构建网页和 Rust 程序。后端默认监听 `127.0.0.1:17110`，网页和 API 共用该端口。
 
    ```bash
    bash start.sh
@@ -49,4 +49,4 @@ bash scripts/package-local.sh "${CARGO_TARGET_DIR:-target}/release/asterion-serv
 python3 -B scripts/test_local_package.py ".local/asterion-local-linux-$(uname -m).tar.gz"
 ```
 
-最后一条命令在临时目录验证解压、首次设置口令、登录、退出和重启。GitHub CI 在 Ubuntu 22.04 与 24.04 验收，在 22.04 上构建用于下载的 x86_64 运行包。
+最后一条命令在临时目录验证解压、首次设置口令和登录，然后换一个端口重启并再次登录。要验证默认监听地址，请在运行测试前留出 `17110` 端口。GitHub CI 在 Ubuntu 22.04 与 24.04 验收，在 22.04 上构建用于下载的 x86_64 运行包。
