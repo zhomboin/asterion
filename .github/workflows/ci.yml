@@ -36,6 +36,7 @@ jobs:
         with:
           persist-credentials: false
       - run: |
+          mkdir -p -m 0700 .local
           bash -n deploy/install-center.sh
           bash -n deploy/build-release.sh
           /usr/bin/python3 -B -m unittest discover -s deploy/center -v
