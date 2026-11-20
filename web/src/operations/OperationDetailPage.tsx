@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { errorMessage, isUnauthorized, request } from '../api';
 import { DataTable, PageHeader, Problem, Timestamp } from '../ui';
 import { useResource } from '../useResource';
-import { operationName, operationStates, operationTarget, type OperationDetail } from './data';
+import { fileErrors, operationName, operationStates, operationTarget, type OperationDetail } from './data';
 
 const auditLabels: Record<string, string> = {
   prepared: '创建确认', confirmed: '确认执行', queued: '加入队列', dispatched: '已下发', started: '开始执行', succeeded: '执行成功',
@@ -26,7 +26,9 @@ export function OperationDetailPage({ id, onExpired }: { id: string; onExpired: 
   const [error, setError] = useState('');
   const job = resource.data;
   const cancellable = job?.can_cancel === true && !resource.error;
-  const accountError = job?.error_code ? accountErrors[job.error_code.replace(/^agent_/u, 'ssh_')] : undefined;
+  const isFile = job?.action.type === 'managed' && ['save_text', 'save_nginx'].includes(job.action.change.verb);
+  const errorCode = job?.error_code?.replace(/^agent_/u, 'ssh_');
+  const failureReason = errorCode && ((isFile && fileErrors[errorCode]) || accountErrors[errorCode]);
 
   async function cancel() {
     setError('');
@@ -67,7 +69,7 @@ export function OperationDetailPage({ id, onExpired }: { id: string; onExpired: 
             {job.cancel_requested_at != null && <div><dt>请求取消时间</dt><dd><Timestamp value={job.cancel_requested_at} /></dd></div>}
             <div><dt>退出码</dt><dd>{job.exit_code ?? '—'}</dd></div>
             <div><dt>错误码</dt><dd className="technical">{job.error_code || '—'}</dd></div>
-            {accountError && <div><dt>失败原因</dt><dd>{accountError}</dd></div>}
+            {failureReason && <div><dt>失败原因</dt><dd>{failureReason}</dd></div>}
           </dl>
           {cancellable && (
             <div className="actions">

@@ -2,6 +2,7 @@
 
 import base64
 import http.cookiejar
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 from ssh_auth_test import check_auth
 
 
@@ -148,7 +150,11 @@ Host !minimal !explicit-key *
     minimal = node("minimal")
     wrong = node("bad-key")
     wait(lambda: request(direct)["status"] == "online", "本机直连失败")
-    policy = {"managed": {"packages": {"shell": {"package": "bash"}}}}
+    check_file_editor(work, direct, password, request, wait)
+    policy = {
+        "file_editor": True,
+        "managed": {"packages": {"shell": {"package": "bash"}}},
+    }
     (work / "direct-profiles.json").write_text(
         json.dumps({f"ssh://{user}@127.0.0.1:{ssh_port}": {"policy": policy}})
     )
@@ -195,6 +201,35 @@ Host !minimal !explicit-key *
     print("本机 HTTP 登录、来源校验、SSH 地址与别名、无 Python 采样和交互终端验证通过")
     check_auth(work, user, ssh_port, request, wait, sample)
     print("指定私钥、SSH 密码认证、拒绝后暂停及更换密码验证通过")
+
+
+def check_file_editor(work, node, password, request, wait):
+    target = work / "sample file.txt"
+    target.write_text("one\n")
+    path = node + "/managed/files?" + urlencode({"key": str(target)})
+    assert request(node + "/operation-catalog")["file_editor"]
+    entry = request(path)
+    assert entry["content"] == "one\n"
+    text = "二\n" * 5000
+    change = dict(
+        key=str(target),
+        verb="save_text",
+        revision=entry["revision"],
+        digest=hashlib.sha256(text.encode()).hexdigest(),
+    )
+    prep = request(node + "/operations", dict(type="managed", change=change))
+    assert prep["step_up_required"]
+    task = "/api/v1/operations/" + prep["task_id"]
+    request(
+        task + "/confirm",
+        dict(challenge=prep["challenge"], content=text, password=password),
+    )
+    wait(lambda: request(task)["finished_at"], "SSH 保存文件超时")
+    result = request(task)
+    assert result["state"] == "succeeded", result
+    assert text not in json.dumps(result, ensure_ascii=False)
+    assert request(path)["content"] == target.read_text() == text
+    assert (work / ".asterion-operations").is_dir()
 
 
 def check_host_keys(work, request):

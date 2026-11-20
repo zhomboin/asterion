@@ -48,7 +48,7 @@ def fixed_path(value, *, directory=False):
     return path
 
 
-def atomic(path, data, original=None):
+def atomic(path, data, original=None, *, before_replace=None):
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".asterion-")
     try:
         with os.fdopen(fd, "wb") as stream:
@@ -61,12 +61,16 @@ def atomic(path, data, original=None):
                 for attribute in os.listxattr(original):
                     os.setxattr(temporary, attribute, os.getxattr(original, attribute))
             os.fsync(stream.fileno())
+            written = os.fstat(stream.fileno())
+        if before_replace:
+            before_replace()
         os.replace(temporary, path)
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
         finally:
             os.close(directory)
+        return written
     finally:
         Path(temporary).unlink(missing_ok=True)
 

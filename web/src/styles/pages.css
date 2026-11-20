@@ -150,3 +150,16 @@
 .node-extra summary { cursor: pointer; color: var(--ink-2); font-size: var(--text-sm); }
 .node-extra[open] summary { margin-block-end: var(--space-3); }
 @media (max-width: 26rem) { .node-auth { grid-template-columns: minmax(0, 1fr); } }
+.file-path-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .65rem;
+  margin-block: 1rem;
+}
+.file-path-form label {
+  display: grid;
+  flex: 0 1 34rem;
+  min-width: 0;
+  gap: .35rem;
+}

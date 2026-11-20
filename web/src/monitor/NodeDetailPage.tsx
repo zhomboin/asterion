@@ -12,6 +12,7 @@ import type { NodeOperations, OperationAction, OperationCatalog } from '../opera
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { AccountsPanel } from '../accounts/AccountsPanel';
 import { ManagedPanel } from '../operations/ManagedPanel';
+import { FilePanel } from '../operations/FilePanel';
 
 const tabs = [
   ['metrics', '指标'],
@@ -21,13 +22,14 @@ const tabs = [
   ['accounts', 'Linux 账号'],
 ] as const;
 
-type Tab = (typeof tabs)[number][0] | 'command' | 'terminal' | 'packages' | 'configs';
+type Tab = (typeof tabs)[number][0] | 'command' | 'terminal' | 'packages' | 'configs' | 'files';
 
 export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () => void }) {
   const base = '/nodes/' + encodeURIComponent(id);
   const node = useResource<Node>(base, onExpired, 5_000);
   const [initialUnit] = useState(() => new URLSearchParams(window.location.search).get('service') ?? undefined);
   const [tab, setTab] = useState<Tab>(initialUnit ? 'systemd' : 'metrics');
+  const [fileDirty, setFileDirty] = useState(false);
   const data = node.data;
   const online = data?.status === 'online' && !node.error;
   const operationCatalog = useResource<OperationCatalog>(online ? base + '/operation-catalog' : null, onExpired, 30_000);
@@ -47,7 +49,7 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
 
   const tabItems: (readonly [Tab, string])[] = [
     ...tabs,
-    ['packages', '软件安装'], ['configs', '服务配置'],
+    ['packages', '软件安装'], ['files', '文件编辑'], ['configs', '服务配置'],
     ...(hasCommands ? [['command', '预定义命令'] as const] : []),
     ...(hasTerminal ? [['terminal', '终端'] as const] : []),
   ];
@@ -76,8 +78,14 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
             <div><dt>节点 ID</dt><dd className="technical">{data.id}</dd></div>
           </dl>
           {data.ssh_error && <p role="alert">{data.ssh_error}</p>}
-          <Tabs label="节点监控视图" items={tabItems} value={activeTab} onChange={setTab} />
+          <Tabs label="节点监控视图" items={tabItems} value={activeTab} onChange={(next) => {
+            if (next === activeTab || (fileDirty && !window.confirm('放弃当前未保存的修改？'))) return;
+            setFileDirty(false);
+            setTab(next);
+          }} />
           {activeTab === 'metrics' && <MetricsPanel base={base} onExpired={onExpired} />}
+          {activeTab === 'files' && <FilePanel key={id} base={base} node={data} online={online}
+            catalog={operationCatalog} onExpired={onExpired} dirty={fileDirty} setDirty={setFileDirty} />}
           {activeTab === 'accounts' && !online && (
             <p className="empty">{node.error ? '暂时无法确认 SSH 状态' : data.status === 'pending' ? 'SSH 尚未连接' : 'SSH 离线，实时查询暂不可用'}</p>
           )}

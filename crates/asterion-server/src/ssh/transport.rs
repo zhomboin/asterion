@@ -40,6 +40,14 @@ pub(super) async fn call(
             "accounts",
             include_str!("../../../../deploy/ssh/accounts.py"),
         ),
+        (
+            "nginx_config",
+            include_str!("../../../../deploy/ssh/nginx_config.py"),
+        ),
+        (
+            "text_files",
+            include_str!("../../../../deploy/ssh/text_files.py"),
+        ),
         ("actions", include_str!("../../../../deploy/ssh/actions.py")),
         (
             "dispatch",
@@ -54,8 +62,16 @@ pub(super) async fn call(
         .into_iter()
         .filter(|(name, _)| !lightweight || matches!(*name, "common" | "monitor" | "dispatch"))
         .collect();
+    let mut policy = if lightweight {
+        Value::Null
+    } else {
+        target.policy().clone()
+    };
+    if !lightweight && matches!(target, Target::Direct(..)) && policy.is_null() {
+        policy["file_editor"] = Value::Bool(true);
+    }
     let mut request = json!({"modules":modules, "kind":kind, "args":args,
-        "policy":if lightweight {Value::Null} else {target.policy().clone()}, "seconds":seconds})
+        "policy":policy, "seconds":seconds})
     .to_string()
     .into_bytes();
     if request.len() > 520000 {
