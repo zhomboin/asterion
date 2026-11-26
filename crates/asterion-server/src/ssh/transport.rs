@@ -99,7 +99,7 @@ pub(super) async fn call(
     let collector_command;
     let remote = if kind == "sample" {
         collector_command = format!(
-            "if command -v asterion-collector >/dev/null 2>&1; then exec asterion-collector export; fi\n{remote}"
+            "if test -x /usr/local/bin/asterion-collector; then exec /usr/local/bin/asterion-collector export; fi\nif command -v asterion-collector >/dev/null 2>&1; then exec asterion-collector export; fi\n{remote}"
         );
         collector_command.as_str()
     } else {

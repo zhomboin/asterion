@@ -16,6 +16,7 @@ import urllib.error
 
 from local_panel_test import check_local_panel
 from collector_ssh_test import check_collector
+from collector_deployment_test import check_deployment
 
 
 def port():
@@ -50,6 +51,9 @@ def launch(stack, command, log, env=None):
 
 
 def exercise(work, stack):
+    system_deploy = os.environ.get("TEST_SYSTEM_DEPLOY") == "1"
+    if system_deploy and os.environ.get("GITHUB_ACTIONS") != "true":
+        raise RuntimeError("系统级安装测试仅在专用 GitHub 执行机运行")
     ssh_port = port()
     for key in ("host", "key"):
         subprocess.run(
@@ -68,14 +72,30 @@ AuthorizedKeysFile {work}/key.pub
 PidFile {work}/sshd.pid
 PasswordAuthentication no
 KbdInteractiveAuthentication no
-UsePAM no
+UsePAM {"yes" if system_deploy else "no"}
 AllowUsers {user}
 DisableForwarding yes
-SetEnv HOME={work} PATH={work}/bin:/usr/local/bin:/usr/bin:/bin ASTERION_COLLECTOR_DB={work}/collector.db
+SetEnv HOME={work} PATH={work}/bin:/usr/local/bin:/usr/bin:/bin {"" if system_deploy else f"ASTERION_COLLECTOR_DB={work}/collector.db"}
 """)
+    system_unit = "asterion-sshd-" + secrets.token_hex(6)
+    service = (
+        [
+            "sudo",
+            "systemd-run",
+            "--quiet",
+            "--wait",
+            "--pipe",
+            "--collect",
+            "--unit",
+            system_unit,
+        ]
+        if system_deploy
+        else []
+    )
     sshd = launch(
         stack,
         [
+            *service,
             os.environ.get("TEST_SSHD", "/usr/sbin/sshd"),
             "-D",
             "-e",
@@ -84,6 +104,12 @@ SetEnv HOME={work} PATH={work}/bin:/usr/local/bin:/usr/bin:/bin ASTERION_COLLECT
         ],
         work / "sshd.log",
     )
+
+    if system_deploy:
+        stack.callback(subprocess.run, ["sudo", "systemctl", "stop", system_unit])
+        stack.callback(
+            subprocess.run, ["sudo", "systemctl", "stop", "asterion-collector.service"]
+        )
 
     def listening():
         if sshd.poll() is not None:
@@ -185,6 +211,9 @@ SetEnv HOME={work} PATH={work}/bin:/usr/local/bin:/usr/bin:/bin ASTERION_COLLECT
         print(api(node)["ssh_error"], (work / "sshd.log").read_text())
         raise
     assert api(node + "/metrics")["samples"][-1]["sample"]["memory"]["total_bytes"] > 0
+    if system_deploy or os.environ.get("TEST_DEPLOY_CHECKS"):
+        check_deployment(api, node, password, work, system_deploy, target)
+        return
     if os.environ.get("TEST_COLLECTOR_ONLY"):
         check_collector(work, stack, sshd, node, api, launch, wait)
         return

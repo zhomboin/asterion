@@ -23,6 +23,13 @@ struct ExportRequest {
 async fn main() -> Result<()> {
     let path = config::database();
     match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [cmd, since] if cmd == "ready" => {
+            storage::ready(&path, since.parse().context("采样时间无效")?).await
+        }
+        [cmd] if cmd == "--version" => {
+            println!("asterion-collector {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         [cmd] if cmd == "run" => {
             let policy = config::Policy::load()?;
             let now = || unix_time().context("系统时间无效");

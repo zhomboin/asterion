@@ -1,6 +1,22 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Settings {
+    pub interval_secs: u64,
+    pub retention_days: u64,
+    pub max_mib: u64,
+}
+
+impl Settings {
+    pub fn valid(&self) -> bool {
+        (5..=3600).contains(&self.interval_secs)
+            && (1..=365).contains(&self.retention_days)
+            && (1..=16384).contains(&self.max_mib)
+    }
+}
+
 pub const MAX_SAMPLE_BYTES: usize = 48 * 1024;
 pub const BATCH_BYTES: usize = 192 * 1024;
 pub const BATCH_ROWS: usize = 256;

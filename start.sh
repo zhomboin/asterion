@@ -16,7 +16,7 @@ if [[ ! -x $panel ]]; then
     fi
     npm --prefix web run build
     export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/.local/cargo-target}"
-    cargo build --locked -p asterion-server
+    cargo build --locked -p asterion-server -p asterion-collector
     panel=$(realpath -- "$CARGO_TARGET_DIR/debug/asterion-server")
 fi
 

@@ -3,12 +3,13 @@ import { errorMessage, isUnauthorized, request } from '../api';
 import { Timestamp } from '../ui';
 import { operationName, operationTarget, type AccountChange, type OperationAction, type PreparedOperation } from './data';
 
-export function ProposalDialog({ nodeId, nodeName, action, resourceName, content, onClose, onExpired, onConfirmed }: {
+export function ProposalDialog({ nodeId, nodeName, action, resourceName, content, sudoForCollector, onClose, onExpired, onConfirmed }: {
   nodeId: string;
   nodeName: string;
   action: OperationAction;
   resourceName?: string;
   content?: string;
+  sudoForCollector?: boolean;
   onClose: () => void;
   onExpired: () => void;
   onConfirmed?: (id: string) => void;
@@ -47,9 +48,11 @@ export function ProposalDialog({ nodeId, nodeName, action, resourceName, content
         }));
         return;
       }
-      const password = new FormData(form).get('password');
+      const fields = new FormData(form);
+      const password = fields.get('password');
+      const sudoPassword = sudoForCollector && selected.type === 'collector_deploy' ? fields.get('sudo_password') || undefined : undefined;
       const body = prepared.step_up_required
-        ? { challenge: prepared.challenge, password, content }
+        ? { challenge: prepared.challenge, password, content, sudo_password: sudoPassword }
         : { challenge: prepared.challenge };
       const path = '/operations/' + encodeURIComponent(prepared.task_id);
       await request(path + '/confirm', { method: 'POST', body, response: 'empty' });
@@ -73,6 +76,12 @@ export function ProposalDialog({ nodeId, nodeName, action, resourceName, content
       <dl className="detail-facts asset-facts">
         <div><dt>节点</dt><dd>{nodeName}</dd></div>
         <div><dt>目标</dt><dd className="technical">{resourceName ?? operationTarget(selected)}</dd></div>
+        {selected.type === 'collector_deploy' && <>
+          <div><dt>变更</dt><dd>安装采集器和 systemd 服务，启用开机采集，授予当前 SSH 账号读取采样的权限。</dd></div>
+          <div><dt>采集配置</dt><dd>{selected.settings
+            ? `${selected.settings.interval_secs} 秒采样 · ${selected.settings.retention_days} 天 · ${selected.settings.max_mib} MiB`
+            : '沿用已有配置，首次安装使用默认值'}</dd></div>
+        </>}
         {selected.type === 'docker' && (
           <>
             <div><dt>Engine ID</dt><dd className="technical">{selected.engine_id}</dd></div>
@@ -100,6 +109,9 @@ export function ProposalDialog({ nodeId, nodeName, action, resourceName, content
           <p className="error">SIGKILL 会立即终止进程。进程没有机会清理资源。</p>
         )}
         {prepared?.step_up_required && <label>管理员口令<input type="password" name="password" required autoComplete="current-password" /></label>}
+        {prepared && selected.type === 'collector_deploy' && sudoForCollector &&
+          <label>远端 sudo 密码（免密可留空）<input type="password" name="sudo_password" maxLength={1024} autoComplete="off" /></label>}
+        {selected.type === 'collector_deploy' && selected.settings && <p>缩短保留时间或降低容量后，服务器会清理超限的旧记录。</p>}
         {expired && <p className="error" role="alert">确认已过期，请重新选择操作。</p>}
         {error && (
           <p className="error" role="alert">

@@ -30,7 +30,7 @@
 
 ## 本地运行服务器采集器
 
-在项目根目录执行。数据留在 Git 忽略的测试目录。第二个终端在相同目录导出第一批记录，结束时在采集终端按 Ctrl+C。远端 systemd 安装、SSH 自动同步和保留参数见[服务器端采集器](collector.md)。
+在项目根目录执行。数据留在 Git 忽略的测试目录。第二个终端在相同目录导出第一批记录，结束时在采集终端按 Ctrl+C。从源码启动面板也会构建同架构采集器。部署到其他架构时，可将兼容的二进制放入面板可执行文件旁的 `collectors/<架构>/asterion-collector`。CI 为正式运行包附带 ARM64 二进制。远端界面部署、SSH 自动同步和保留参数见[服务器端采集器](collector.md)。
 
 ```bash
 cargo build --locked -p asterion-collector

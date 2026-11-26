@@ -69,6 +69,19 @@ pub(super) struct Preparation {
     step_up_required: bool,
 }
 
+pub(super) async fn collector_status(
+    _: AdminSession,
+    State(pool): State<SqlitePool>,
+    Extension(bus): Extension<Arc<SshBus>>,
+    Path(node): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    node_name(&pool, &node).await?;
+    bus.query(&node, "collector_status", json!({}))
+        .await
+        .map(Json)
+        .map_err(bus_error)
+}
+
 pub(super) async fn catalog(
     _: AdminSession,
     State(pool): State<SqlitePool>,
@@ -148,6 +161,7 @@ pub(super) async fn prepare(
 pub(super) struct Confirmation {
     challenge: String,
     password: Option<String>,
+    sudo_password: Option<String>,
     content: Option<String>,
 }
 
@@ -204,7 +218,15 @@ pub(super) async fn confirm(
 
     // 保证已落库的确认不依赖浏览器持续等待响应。
     tokio::spawn(async move {
-        let target = claim(&pool, &session, &id, &hash, body.content.as_deref()).await?;
+        let target = claim(
+            &pool,
+            &session,
+            &id,
+            &hash,
+            body.content.as_deref(),
+            body.sudo_password.as_deref(),
+        )
+        .await?;
         tokio::spawn(run::execute(
             pool,
             bus,
@@ -214,6 +236,7 @@ pub(super) async fn confirm(
                 action: target.action,
                 content: body.content,
             },
+            body.sudo_password,
         ));
         Ok::<_, ConfirmError>(())
     })
@@ -239,6 +262,7 @@ async fn claim(
     id: &str,
     challenge_hash: &[u8; 32],
     content: Option<&str>,
+    sudo_password: Option<&str>,
 ) -> Result<Target, ConfirmError> {
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
     session.ensure_active(&mut tx).await?;
@@ -267,7 +291,14 @@ async fn claim(
     let action: OperationAction = serde_json::from_str(&encoded)
         .map_err(sqlx::Error::decode)
         .map_err(ApiError::from)?;
-    if !action.valid() || !content_matches(&action, content) {
+    if !action.valid()
+        || !content_matches(&action, content)
+        || sudo_password.is_some_and(|s| {
+            !matches!(action, OperationAction::CollectorDeploy { .. })
+                || s.len() > 1024
+                || s.contains(['\0', '\r', '\n'])
+        })
+    {
         return Err(ApiError::INVALID.into());
     }
     let (in_flight, node_busy) = sqlx::query_as::<_, (i64, bool)>(
@@ -313,7 +344,7 @@ pub(super) async fn cancel(
     let mut tx = pool.begin().await?;
     storage::expire(&mut tx).await?;
     let (node, state, managed) = sqlx::query_as::<_, (String, String, bool)>(
-        "SELECT node_id, state, json_extract(action, '$.type') = 'managed' FROM operation_jobs WHERE id = ? AND actor = ? AND session_hash = ?",
+        "SELECT node_id, state, json_extract(action, '$.type') IN ('managed','collector_deploy') FROM operation_jobs WHERE id = ? AND actor = ? AND session_hash = ?",
     )
     .bind(&id)
     .bind(&session.username)

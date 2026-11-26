@@ -12,10 +12,16 @@ use crate::ssh_bus::{BusError, PendingTask, SshBus};
 const DEADLINE: Duration = Duration::from_secs(75);
 const OUTPUT_BYTES: usize = 32 * 1024;
 
-pub(super) async fn execute(pool: SqlitePool, bus: Arc<SshBus>, node: String, task: OperationTask) {
+pub(super) async fn execute(
+    pool: SqlitePool,
+    bus: Arc<SshBus>,
+    node: String,
+    task: OperationTask,
+    sudo_password: Option<String>,
+) {
     let id = task.task_id.clone();
     let account_change = matches!(task.action, OperationAction::Account { .. });
-    let finished = match dispatch(&pool, &bus, &node, task).await {
+    let finished = match dispatch(&pool, &bus, &node, task, sudo_password).await {
         Ok(Some(Ok(pending))) => {
             let result = wait_with_progress(&pool, &id, pending).await;
             if result == Err(BusError::Timeout) {
@@ -92,9 +98,11 @@ async fn dispatch(
     bus: &SshBus,
     node: &str,
     task: OperationTask,
+    sudo_password: Option<String>,
 ) -> Result<Option<Result<PendingTask, BusError>>, sqlx::Error> {
     let id = task.task_id.clone();
     let deadline = match &task.action {
+        OperationAction::CollectorDeploy { .. } => Duration::from_secs(300),
         OperationAction::Managed { change }
             if change.verb == asterion_protocol::managed::ManagedVerb::Install =>
         {
@@ -102,7 +110,10 @@ async fn dispatch(
         }
         _ => DEADLINE,
     };
-    let payload = serde_json::to_value(task).map_err(sqlx::Error::decode)?;
+    let mut payload = serde_json::to_value(task).map_err(sqlx::Error::decode)?;
+    if let Some(secret) = sudo_password {
+        payload["sudo_password"] = Value::String(secret);
+    }
     let mut tx = pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE operation_jobs SET state = 'running', started_at = unixepoch()
@@ -339,6 +350,7 @@ mod tests {
                 action,
                 content: None,
             },
+            None,
         );
         tokio::time::timeout(Duration::from_secs(2), async {
             tokio::join!(simulate, run)

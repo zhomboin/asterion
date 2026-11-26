@@ -14,4 +14,4 @@
 
 直连 Linux 节点需要可读的 `/proc` 和常用系统命令。基础采样包括 CPU、内存、根分区和网卡累计流量。SSH 即时完整采样、命名连接的即时采样和专用资源查询需要 Python 3.9 或以上版本。安装 Rust 采集器的节点可直接通过 SSH 导出主机指标。Docker、systemd 和进程信息按需读取，实际范围由所选 SSH 账号的权限决定。
 
-面板默认每 15 秒采样，原始数据保留 7 天，趋势保留 90 天。可在启动时分别设置 `ASTERION_SAMPLE_INTERVAL_SECS`、`ASTERION_METRIC_RETENTION_DAYS` 和 `ASTERION_TREND_RETENTION_DAYS`。默认采样、告警和持续服务检查随本机程序运行。安装[服务器端采集器](collector.md)后，主机指标也会保存在节点，断线期间继续采样，重连后自动补回。连接失败时可在节点详情查看原因和上次成功时间。
+面板默认每 15 秒采样，原始数据保留 7 天，趋势保留 90 天。可在启动时分别设置 `ASTERION_SAMPLE_INTERVAL_SECS`、`ASTERION_METRIC_RETENTION_DAYS` 和 `ASTERION_TREND_RETENTION_DAYS`。默认采样、告警和持续服务检查随本机程序运行。从节点「监控部署」安装[服务器端采集器](collector.md)后，主机指标也会保存在节点，断线期间继续采样，重连后自动补回。连接失败时可在节点详情查看原因和上次成功时间。

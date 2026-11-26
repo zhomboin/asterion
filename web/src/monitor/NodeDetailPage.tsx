@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Node } from '../api';
 import { NodeStatus, PageHeader, Problem, Tabs, Timestamp } from '../ui';
 import { useResource } from '../useResource';
+import { CollectorDeployment } from './CollectorDeployment';
 import { MetricsPanel } from './MetricsPanel';
 import { ProcessesPanel } from './ProcessesPanel';
 import { DockerPanel } from './DockerPanel';
@@ -16,6 +17,7 @@ import { FilePanel } from '../operations/FilePanel';
 
 const tabs = [
   ['metrics', '指标'],
+  ['collector', '监控部署'],
   ['processes', '进程'],
   ['docker', 'Docker'],
   ['systemd', 'systemd'],
@@ -83,6 +85,7 @@ export function NodeDetailPage({ id, onExpired }: { id: string; onExpired: () =>
             setFileDirty(false);
             setTab(next);
           }} />
+          {activeTab === 'collector' && <CollectorDeployment key={id} node={data} onExpired={onExpired} />}
           {activeTab === 'metrics' && <MetricsPanel base={base} onExpired={onExpired} />}
           {activeTab === 'files' && <FilePanel key={id} base={base} node={data} online={online}
             catalog={operationCatalog} onExpired={onExpired} dirty={fileDirty} setDirty={setFileDirty} />}
