@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/asterion-protocol",
+    "crates/asterion-collector",
     "crates/asterion-server",
 ]
 resolver = "3"

@@ -26,6 +26,8 @@ DEFAULT_PORT = 17110
 def check_guides(work):
     docs = work / "docs"
     assert (docs / "local.md").is_file()
+    assert os.access(work / "asterion-collector", os.X_OK)
+    assert (work / "deploy/collector/asterion-collector.service").is_file()
     for guide in docs.glob("*.md"):
         for link in re.findall(r"\]\(([^)\s]+)\)", guide.read_text(encoding="utf-8")):
             target = urlsplit(link)

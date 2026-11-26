@@ -1,0 +1,60 @@
+"""验证远端采集、SSH 中断和重连补传，进程由调用方统一关闭。"""
+
+import json
+import os
+from pathlib import Path
+import sqlite3
+from contextlib import closing
+
+
+def check_collector(work, stack, sshd, node, api, launch, wait):
+    binary = Path(
+        os.environ.get("TEST_COLLECTOR", "target/debug/asterion-collector")
+    ).resolve(strict=True)
+    bindir = work / "bin"
+    bindir.mkdir()
+    (bindir / "asterion-collector").symlink_to(binary)
+    db = work / "collector.db"
+    launch(
+        stack,
+        [binary, "run"],
+        work / "collector.log",
+        {
+            **os.environ,
+            "ASTERION_COLLECTOR_DB": str(db),
+            "ASTERION_COLLECTOR_INTERVAL_SECS": "5",
+        },
+    )
+    wait(lambda: api(node + "/metrics").get("collector"), "面板没有通过 SSH 发现采集器")
+
+    def readings(after):
+        with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
+            return conn.execute(
+                "SELECT seq,captured_at,sample FROM readings WHERE seq>? ORDER BY seq",
+                (after,),
+            ).fetchall()
+
+    sshd.terminate()
+    sshd.wait(timeout=5)
+    wait(lambda: api(node)["status"] == "offline", "SSH 断开后节点未显示离线")
+    boundary = readings(0)[-1][0]
+    wait(lambda: len(readings(boundary)) >= 2, "断开 SSH 后远端未继续采样")
+    offline = readings(boundary)
+    launch(stack, sshd.args, work / "reconnected-sshd.log")
+    node_id = node.rsplit("/", 1)[1]
+
+    def restored():
+        with closing(sqlite3.connect(f"file:{work / 'db'}?mode=ro", uri=True)) as conn:
+            for _, at, sample in offline:
+                row = conn.execute(
+                    "SELECT sample FROM metric_samples WHERE node_id=? AND observed_at=?",
+                    (node_id, at),
+                ).fetchone()
+                if row is None or json.loads(row[0]) != json.loads(sample):
+                    return False
+            return True
+
+    wait(restored, "面板未按原时间补回断线期间的样本")
+    assert api(node)["status"] == "online"
+    assert all(row in readings(boundary) for row in offline)
+    print("已验证真实 SSH 断开期间连续采集、原时间补传和远端副本保留")

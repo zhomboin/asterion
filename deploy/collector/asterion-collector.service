@@ -1,0 +1,21 @@
+[Unit]
+Description=Asterion 主机指标采集器
+After=local-fs.target
+
+[Service]
+Type=simple
+User=asterion-collector
+Group=asterion-collector
+UMask=0027
+StateDirectory=asterion-collector
+StateDirectoryMode=0750
+EnvironmentFile=-/etc/default/asterion-collector
+ExecStart=/usr/local/bin/asterion-collector run
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

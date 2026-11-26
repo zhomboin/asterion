@@ -7,8 +7,9 @@ use axum::Router;
 use axum::routing::get;
 use sqlx::SqlitePool;
 
+pub(crate) use asterion_protocol::collector::valid_sample;
 pub(crate) use error::ApiError;
-pub(crate) use metrics::{ensure_node, valid_sample};
+pub(crate) use metrics::ensure_node;
 pub use metrics::{purge_metrics, store_metrics};
 pub(crate) use queries::bus_error;
 

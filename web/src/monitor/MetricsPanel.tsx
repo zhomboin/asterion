@@ -13,6 +13,7 @@ export function MetricsPanel({ base, onExpired }: { base: string; onExpired: () 
   const history = useResource<MetricHistory>(shortRange ? base + '/metrics?range=' + shortRange : null, onExpired, 15_000);
   const samples = history.data?.samples ?? [];
   const last = samples.at(-1);
+  const collector = shortRange ? history.data?.collector : null;
   return (
     <section aria-label="主机指标" className="monitor-view">
       <div className="section-bar">
@@ -23,13 +24,15 @@ export function MetricsPanel({ base, onExpired }: { base: string; onExpired: () 
           </select>
         </label>
       </div>
+      {collector && collector.pending > 0 && <p role="status">离线记录同步中，尚余 {collector.pending} 条序号待检查</p>}
+      {collector && collector.missed > 0 && <p className="observation">累计未能补回 {collector.missed} 条记录（缓存清理或节点时钟异常）</p>}
       {history.loading && <p role="status">正在加载指标…</p>}
       {history.error && <Problem error={history.error} retry={history.refresh} />}
       {history.data && !last && <p className="empty">此时间范围暂无采样</p>}
       {(range === '7d' || range === '30d') && <LongTrends base={base} range={range} onExpired={onExpired} />}
       {shortRange && last && (
         <>
-          <p className="observation">来源 · SSH · 最近采样 <Timestamp value={last.sample.captured_at} /> · 中心接收 <Timestamp value={last.observed_at} /></p>
+          <p className="observation">{collector ? '服务器采集器' : 'SSH'} · 最近采样 <Timestamp value={last.sample.captured_at} /></p>
           {history.data?.truncated && <p className="observation">较早的指标采样已截断</p>}
           <MetricFacts sample={last.sample} />
           <Trend samples={samples} range={shortRange} interval={history.data?.interval_seconds} bucket={history.data?.bucket_seconds} />

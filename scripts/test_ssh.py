@@ -15,6 +15,7 @@ import urllib.request
 import urllib.error
 
 from local_panel_test import check_local_panel
+from collector_ssh_test import check_collector
 
 
 def port():
@@ -70,7 +71,7 @@ KbdInteractiveAuthentication no
 UsePAM no
 AllowUsers {user}
 DisableForwarding yes
-SetEnv HOME={work}
+SetEnv HOME={work} PATH={work}/bin:/usr/local/bin:/usr/bin:/bin ASTERION_COLLECTOR_DB={work}/collector.db
 """)
     sshd = launch(
         stack,
@@ -184,6 +185,9 @@ SetEnv HOME={work}
         print(api(node)["ssh_error"], (work / "sshd.log").read_text())
         raise
     assert api(node + "/metrics")["samples"][-1]["sample"]["memory"]["total_bytes"] > 0
+    if os.environ.get("TEST_COLLECTOR_ONLY"):
+        check_collector(work, stack, sshd, node, api, launch, wait)
+        return
     assert api(node + "/processes?limit=2")
     assert api(node + "/managed/packages?key=shell")["installed"]
     assert api(node + "/accounts")["users"]
@@ -213,6 +217,7 @@ SetEnv HOME={work}
     )
     print("SSH 主机密钥、节点采样、资源面板、命令退出码和交互终端验证通过")
     check_local_panel(work, stack, user, ssh_port, port(), launch, wait)
+    check_collector(work, stack, sshd, node, api, launch, wait)
 
 
 if __name__ == "__main__":

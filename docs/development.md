@@ -28,6 +28,24 @@
 
 开发数据默认在项目的 `.local/panel/`。实际使用的账号、地址、私钥和测试数据只放在 Git 忽略的私有位置。结束开发时，在面板和前端监听终端分别按 Ctrl+C。
 
+## 本地运行服务器采集器
+
+在项目根目录执行。数据留在 Git 忽略的测试目录。第二个终端在相同目录导出第一批记录，结束时在采集终端按 Ctrl+C。远端 systemd 安装、SSH 自动同步和保留参数见[服务器端采集器](collector.md)。
+
+```bash
+cargo build --locked -p asterion-collector
+mkdir -p -m 700 .local/collector-dev
+export ASTERION_COLLECTOR_DB="$PWD/.local/collector-dev/history.db"
+"${CARGO_TARGET_DIR:-target}/debug/asterion-collector" run
+```
+
+```bash
+export ASTERION_COLLECTOR_DB="$PWD/.local/collector-dev/history.db"
+printf '%s\n' '{"args":{"stream":"","seq":0}}' | "${CARGO_TARGET_DIR:-target}/debug/asterion-collector" export
+cargo test --locked -p asterion-collector
+cargo test --locked -p asterion-server --lib ssh::collector
+```
+
 ## 按改动验证
 
 ```bash
@@ -48,7 +66,8 @@ TEST_NGINX="$(command -v nginx)" python3 -B -m unittest discover -s deploy/ssh -
 验证节点认证和文件保存时，先构建后端，再运行 SSH 集成测试。测试使用本机回环端口、临时密钥和一次性密码，需要本机测试环境提供 OpenSSH 服务端程序及 Python Paramiko。
 
 ```bash
-cargo build --locked -p asterion-server
+cargo build --locked -p asterion-server -p asterion-collector
+TEST_COLLECTOR="${CARGO_TARGET_DIR:-target}/debug/asterion-collector" \
 TEST_CENTER="${CARGO_TARGET_DIR:-target}/debug/asterion-server" /usr/bin/python3 -B scripts/test_ssh.py
 ```
 
@@ -57,7 +76,7 @@ TEST_CENTER="${CARGO_TARGET_DIR:-target}/debug/asterion-server" /usr/bin/python3
 ```bash
 npm --prefix web ci
 npm --prefix web run build
-cargo build --locked --release -p asterion-server
+cargo build --locked --release -p asterion-server -p asterion-collector
 bash scripts/package-local.sh "${CARGO_TARGET_DIR:-target}/release/asterion-server"
 python3 -B scripts/test_local_package.py ".local/asterion-local-linux-$(uname -m).tar.gz"
 ```

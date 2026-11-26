@@ -36,6 +36,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "asterion-collector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "asterion-protocol",
+ "futures-util",
+ "libc",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "asterion-protocol"
 version = "0.1.0"
 dependencies = [
