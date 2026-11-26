@@ -35,13 +35,16 @@ jobs:
           sudo install -m 0755 target/debug/asterion-collector /usr/local/bin/asterion-collector
           sudo systemd-sysusers "$PWD/deploy/collector/asterion-collector.sysusers"
           sudo install -m 0644 deploy/collector/asterion-collector.service /run/systemd/system/
+          reader="$(id -un)"
+          sudo usermod -aG asterion-collector "$reader"
           sudo systemctl daemon-reload
           trap 'sudo systemctl stop asterion-collector' EXIT
           sudo systemctl start asterion-collector
           for attempt in {1..15}; do
             if printf '%s\n' '{"args":{"stream":"","seq":0}}' |
-                sudo -u "$(id -un)" -g asterion-collector /usr/local/bin/asterion-collector export |
+                sudo runuser -u "$reader" -- /usr/local/bin/asterion-collector export |
                 jq -e '.value.collector.records | length > 0' >/dev/null; then
+              sudo runuser -u "$reader" -- test ! -w /var/lib/asterion-collector/history.db
               exit 0
             fi
             sleep 1

@@ -38,6 +38,8 @@ async fn cache_survives_restart_and_enforces_age_and_disk_budget() -> anyhow::Re
     };
     let mut db = storage::writer(&path, &policy, 100).await?;
     let mut sample = crate::sample::Sampler::default().sample(100)?;
+    let cpu = 15.547949981178155_f64;
+    sample["cpu_percent"] = json!(cpu);
     let mount = format!("/{}", "x".repeat(4000));
     sample["filesystems"] =
         json!([{"mountpoint":mount,"fs_type":"ext4","total_bytes":2,"available_bytes":1}]);
@@ -47,6 +49,7 @@ async fn cache_survives_restart_and_enforces_age_and_disk_budget() -> anyhow::Re
     }
     let first = storage::export(&path, &Cursor::default()).await?;
     assert!(first.records[0].seq > 1);
+    assert_eq!(first.records[0].sample["cpu_percent"].as_f64(), Some(cpu));
     assert!(first.records.last().unwrap().seq < first.newest_seq);
     assert_eq!(first.newest_seq, 160);
     assert!(fs::metadata(&path)?.len() < policy.max_bytes as u64);
