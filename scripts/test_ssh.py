@@ -211,11 +211,13 @@ SetEnv HOME={work} PATH={work}/bin:/usr/local/bin:/usr/bin:/bin {"" if system_de
         print(api(node)["ssh_error"], (work / "sshd.log").read_text())
         raise
     assert api(node + "/metrics")["samples"][-1]["sample"]["memory"]["total_bytes"] > 0
-    if system_deploy or os.environ.get("TEST_DEPLOY_CHECKS"):
+    deploy_checks = os.environ.get("TEST_DEPLOY_CHECKS") == "1"
+    if system_deploy or deploy_checks:
         check_deployment(api, node, password, work, system_deploy, target)
-        return
-    if os.environ.get("TEST_COLLECTOR_ONLY"):
-        check_collector(work, stack, sshd, node, api, launch, wait)
+        if system_deploy:
+            return
+    if deploy_checks or os.environ.get("TEST_COLLECTOR_ONLY"):
+        check_collector(work, stack, sshd, node, api, launch, wait, target)
         return
     assert api(node + "/processes?limit=2")
     assert api(node + "/managed/packages?key=shell")["installed"]
@@ -246,7 +248,7 @@ SetEnv HOME={work} PATH={work}/bin:/usr/local/bin:/usr/bin:/bin {"" if system_de
     )
     print("SSH 主机密钥、节点采样、资源面板、命令退出码和交互终端验证通过")
     check_local_panel(work, stack, user, ssh_port, port(), launch, wait)
-    check_collector(work, stack, sshd, node, api, launch, wait)
+    check_collector(work, stack, sshd, node, api, launch, wait, target)
 
 
 if __name__ == "__main__":

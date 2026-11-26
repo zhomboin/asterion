@@ -71,6 +71,19 @@ TEST_COLLECTOR="${CARGO_TARGET_DIR:-target}/debug/asterion-collector" \
 TEST_CENTER="${CARGO_TARGET_DIR:-target}/debug/asterion-server" /usr/bin/python3 -B scripts/test_ssh.py
 ```
 
+### 推送前验证采集器部署
+
+改动采集器部署、读取权限或补传时，在启用 systemd 的 Linux 或 WSL 测试环境中用普通账号执行。需要 OpenSSH 客户端、测试用 sshd、Python Paramiko 和面板的构建依赖。测试用 sshd 不在系统默认路径时，用 `TEST_SSHD` 指定。测试使用项目私有临时目录及回环 SSH，结束后自动清理。
+
+```bash
+cargo build --locked -p asterion-server -p asterion-collector
+TEST_DEPLOY_CHECKS=1 \
+TEST_COLLECTOR="${CARGO_TARGET_DIR:-target}/debug/asterion-collector" \
+TEST_CENTER="${CARGO_TARGET_DIR:-target}/debug/asterion-server" /usr/bin/python3 -B scripts/test_ssh.py
+```
+
+推送前确认命令成功退出。它检查部署参数、二次确认和节点身份变化，再以新的 SSH 登录读取只读数据库快照，核对撤销读取权限时的错误，并断开 SSH 验证重连补传。GitHub CI 在一次性 Ubuntu 执行机上验证真实 systemd 服务的安装、重新部署、开机启动，以及 SSH 登录账号新增的用户组权限。合并前核对 PR 最终提交的检查，合并后单独核对主分支提交的运行结果。
+
 ## 构建和验证本机运行包
 
 ```bash

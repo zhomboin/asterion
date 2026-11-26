@@ -1,11 +1,11 @@
 """通过面板实际使用的接口核对部署确认、任务结果与远端服务。"""
 
 import json
-from pathlib import Path
 import secrets
-import subprocess
 import time
 import urllib.error
+
+from collector_reader_test import node_command, verify_reader
 
 
 def check_deployment(api, node, password, work, install, target):
@@ -73,50 +73,15 @@ def check_deployment(api, node, password, work, install, target):
         installed = api(status_path)
         assert installed["state"] == "active" and installed["enabled"]
         assert installed["settings"] == settings
-        assert (
-            subprocess.run(
-                ["systemctl", "is-enabled", "--quiet", "asterion-collector"]
-            ).returncode
-            == 0
-        )
-        config = Path("/etc/default/asterion-collector").read_text()
+        node_command(work, target, "systemctl is-enabled --quiet asterion-collector")
+        config = node_command(
+            work, target, "cat /etc/default/asterion-collector"
+        ).decode()
         assert "ASTERION_COLLECTOR_RETENTION_DAYS=3" in config
         assert "ASTERION_COLLECTOR_MAX_MIB=32" in config
         assert "ASTERION_COLLECTOR_INTERVAL_SECS=5" in config
-        ssh = [
-            "ssh",
-            "-F",
-            "/dev/null",
-            "-T",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "IdentitiesOnly=yes",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            f"UserKnownHostsFile={work / 'known_hosts'}",
-            "-i",
-            str(work / target["identity_file"]),
-            "-p",
-            str(target["port"]),
-            "-l",
-            target["user"],
-            target["host"],
-        ]
-        database = "/var/lib/asterion-collector/history.db"
-        subprocess.run(
-            [
-                *ssh,
-                f"test -r {database} && test ! -w {database} || {{ id; namei -l {database}; exit 1; }}",
-            ],
-            check=True,
-        )
-        with_data = subprocess.check_output(
-            [*ssh, "/usr/local/bin/asterion-collector export"],
-            input=b'{"args":{"stream":"","seq":0}}\n',
-        )
-        stream = json.loads(with_data)["value"]["collector"]["stream"]
+        batch = verify_reader(work, target, "/usr/local/bin/asterion-collector")
+        stream = batch["stream"]
         if options:
             original = stream
         else:

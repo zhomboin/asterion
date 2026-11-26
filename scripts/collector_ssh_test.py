@@ -6,8 +6,10 @@ from pathlib import Path
 import sqlite3
 from contextlib import closing
 
+from collector_reader_test import export, verify_reader
 
-def check_collector(work, stack, sshd, node, api, launch, wait):
+
+def check_collector(work, stack, sshd, node, api, launch, wait, target):
     binary = Path(
         os.environ.get("TEST_COLLECTOR", "target/debug/asterion-collector")
     ).resolve(strict=True)
@@ -26,6 +28,24 @@ def check_collector(work, stack, sshd, node, api, launch, wait):
         },
     )
     wait(lambda: api(node + "/metrics").get("collector"), "面板没有通过 SSH 发现采集器")
+
+    # 用一致的快照改变权限，后台采集器继续写入自己的数据库。
+    snapshot = work / "reader.db"
+    with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as source:
+        with closing(sqlite3.connect(snapshot)) as copy:
+            source.backup(copy)
+            (stream,) = copy.execute(
+                "SELECT stream FROM metadata WHERE id=1"
+            ).fetchone()
+    snapshot.chmod(0o400)
+    batch = verify_reader(work, target, binary, snapshot)
+    assert batch["stream"] == stream
+    snapshot.chmod(0)
+    denied = export(work, target, binary, snapshot)
+    assert (
+        denied["outcome"] == "failure" and denied["code"] == "collector_unavailable"
+    ), denied.get("outcome")
+    print("已通过新的 SSH 会话验证只读导出及无读取权限时的错误")
 
     def readings(after):
         with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
