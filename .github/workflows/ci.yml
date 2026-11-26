@@ -30,27 +30,8 @@ jobs:
           TEST_NGINX="$PWD/.local/nginx-test/unpacked/usr/sbin/nginx" python3 -B -m unittest discover -s deploy/ssh
       - run: cargo +stable build --locked -p asterion-server -p asterion-collector
       - run: /usr/bin/python3 -B scripts/test_ssh.py
-      - name: 验证采集器 systemd 服务及只读导出
-        run: |
-          sudo install -m 0755 target/debug/asterion-collector /usr/local/bin/asterion-collector
-          sudo systemd-sysusers "$PWD/deploy/collector/asterion-collector.sysusers"
-          sudo install -m 0644 deploy/collector/asterion-collector.service /run/systemd/system/
-          reader="$(id -un)"
-          sudo usermod -aG asterion-collector "$reader"
-          sudo systemctl daemon-reload
-          trap 'sudo systemctl stop asterion-collector' EXIT
-          sudo systemctl start asterion-collector
-          for attempt in {1..15}; do
-            if printf '%s\n' '{"args":{"stream":"","seq":0}}' |
-                sudo runuser -u "$reader" -- /usr/local/bin/asterion-collector export |
-                jq -e '.value.collector.records | length > 0' >/dev/null; then
-              sudo runuser -u "$reader" -- test ! -w /var/lib/asterion-collector/history.db
-              exit 0
-            fi
-            sleep 1
-          done
-          sudo journalctl -u asterion-collector --no-pager
-          exit 1
+      - name: 通过面板任务部署并验证真实 systemd 服务
+        run: TEST_SYSTEM_DEPLOY=1 /usr/bin/python3 -B scripts/test_ssh.py
 
   local-package:
     strategy:
@@ -74,10 +55,23 @@ jobs:
           cargo +stable build --locked --release -p asterion-server -p asterion-collector
           npm --prefix web ci
           npm --prefix web run build
+      - name: 为发布包构建 ARM64 采集器
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          rustup target add --toolchain stable aarch64-unknown-linux-gnu
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+          cargo +stable build --locked --release -p asterion-collector --target aarch64-unknown-linux-gnu
+          install -D -m 0755 target/aarch64-unknown-linux-gnu/release/asterion-collector target/release/collectors/aarch64/asterion-collector
       - name: 验证运行包解压、登录与重启
         run: |
           bash scripts/package-local.sh
           python3 -B scripts/test_local_package.py .local/asterion-local-linux-x86_64.tar.gz
+          if [[ -d target/release/collectors/aarch64 ]]; then
+            tar -tzf .local/asterion-local-linux-x86_64.tar.gz collectors/aarch64/asterion-collector
+          fi
       - uses: actions/upload-artifact@v4
         if: matrix.os == 'ubuntu-22.04'
         with:

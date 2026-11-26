@@ -4,6 +4,7 @@ mod collector;
 #[cfg(test)]
 mod collector_tests;
 mod config;
+mod deployment;
 mod direct;
 pub mod host_key;
 mod pty;
@@ -182,10 +183,19 @@ async fn site(
                                 return terminal(&target, &terminals, enabled, request).await;
                             }
                             let Ok(_permit) = slots.try_acquire() else { return TaskReply::failure("busy", "SSH 查询繁忙"); };
+                            if request.kind=="collector_status" {
+                                return deployment::status(&target).await;
+                            }
                             if request.kind=="operation_execute" {
                                 let running = sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM operation_jobs WHERE id=? AND state='running' AND cancel_requested_at IS NULL)")
                                     .bind(&request.request_id).fetch_one(&pool).await;
                                 if !matches!(running, Ok(true)) { return TaskReply::failure("cancelled", "任务已停止"); }
+                                if request.args["action"]["type"]=="collector_deploy" {
+                                    return deployment::deploy(&target,request.args,&progress).await;
+                                }
+                                if request.args.get("sudo_password").is_some() {
+                                    return TaskReply::failure("invalid_argument","此操作不接受 sudo 密码");
+                                }
                             }
                             transport::call(&target, &request.kind, request.args, seconds, Some(&progress)).await
                         };

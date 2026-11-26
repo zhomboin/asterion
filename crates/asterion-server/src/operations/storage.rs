@@ -136,8 +136,12 @@ pub(super) async fn get(
     let can_cancel = same_session
         && matches!(summary.state.as_str(), "prepared" | "queued" | "running")
         && !(summary.state == "running"
-            && serde_json::from_str::<Value>(&summary.action)
-                .is_ok_and(|action| action["type"] == "managed"))
+            && serde_json::from_str::<Value>(&summary.action).is_ok_and(|action| {
+                matches!(
+                    action["type"].as_str(),
+                    Some("managed" | "collector_deploy")
+                )
+            }))
         && summary.cancel_requested_at.is_none();
     Ok(Json(Detail {
         summary,

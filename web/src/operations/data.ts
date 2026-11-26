@@ -6,7 +6,10 @@ export type AccountChange =
   | { type: 'add_key'; username: string; key: string }
   | { type: 'remove_key'; username: string; fingerprint: string };
 
+export type CollectorSettings = { interval_secs: number; retention_days: number; max_mib: number };
+
 export type OperationAction =
+  | { type: 'collector_deploy'; revision: string; settings?: CollectorSettings }
   | { type: 'managed'; change: ManagedChange }
   | { type: 'account'; change: AccountChange }
   | { type: 'systemd'; unit: string; verb: ServiceVerb }
@@ -119,6 +122,7 @@ const namesByChange = {
 export function operationName(action: OperationAction): string {
   if (action.type === 'account') return namesByChange[action.change.type];
   switch (action.type) {
+    case 'collector_deploy': return '部署离线采集器';
     case 'managed': return managedLabels[action.change.verb];
     case 'systemd': return serviceVerbLabel[action.verb] + ' systemd 服务';
     case 'docker': return serviceVerbLabel[action.verb] + '容器';
@@ -130,6 +134,7 @@ export function operationName(action: OperationAction): string {
 export function operationTarget(action: OperationAction): string {
   if (action.type === 'account') return action.change.username;
   switch (action.type) {
+    case 'collector_deploy': return 'asterion-collector.service';
     case 'managed': return action.change.key;
     case 'systemd': return action.unit;
     case 'docker': return action.container_id;

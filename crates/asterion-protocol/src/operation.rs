@@ -20,6 +20,10 @@ pub enum ProcessSignal {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OperationAction {
+    CollectorDeploy {
+        revision: String,
+        settings: Option<crate::collector::Settings>,
+    },
     Managed {
         change: crate::managed::ManagedAction,
     },
@@ -49,6 +53,9 @@ pub enum OperationAction {
 impl OperationAction {
     pub fn valid(&self) -> bool {
         match self {
+            Self::CollectorDeploy { revision, settings } => {
+                crate::is_token(revision) && settings.as_ref().is_none_or(|s| s.valid())
+            }
             Self::Managed { change } => change.valid(),
             Self::Systemd { unit, .. } => valid_service_unit(unit),
             Self::Docker {
@@ -79,12 +86,14 @@ impl OperationAction {
                 signal: ProcessSignal::Kill,
                 ..
             } | Self::Account { .. }
+                | Self::CollectorDeploy { .. }
                 | Self::Managed { .. }
         )
     }
 
     pub fn target(&self) -> String {
         match self {
+            Self::CollectorDeploy { .. } => "asterion-collector.service".to_owned(),
             Self::Managed { change } => change.key.clone(),
             Self::Systemd { unit, .. } => unit.clone(),
             Self::Docker {

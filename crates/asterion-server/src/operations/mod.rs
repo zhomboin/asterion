@@ -16,6 +16,10 @@ pub fn routes() -> Router<SqlitePool> {
             "/api/v1/nodes/{id}/operation-catalog",
             get(workflow::catalog),
         )
+        .route(
+            "/api/v1/nodes/{id}/collector-deployment",
+            get(workflow::collector_status),
+        )
         .route("/api/v1/nodes/{id}/operations", post(workflow::prepare))
         .route("/api/v1/nodes/{id}/managed/{group}", get(workflow::managed))
         .route("/api/v1/operations", get(storage::list))

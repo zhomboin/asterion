@@ -95,12 +95,29 @@ pub async fn write(db: &mut SqliteConnection, policy: &Policy, sample: &Value) -
     Ok(())
 }
 
-pub async fn export(path: &Path, cursor: &Cursor) -> Result<Batch> {
+async fn reader(path: &Path) -> Result<SqliteConnection> {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .read_only(true)
         .busy_timeout(Duration::from_secs(5));
-    let mut db = SqliteConnection::connect_with(&options).await?;
+    Ok(SqliteConnection::connect_with(&options).await?)
+}
+
+pub async fn ready(path: &Path, since: i64) -> Result<()> {
+    let mut db = reader(path).await?;
+    let newest: Option<i64> =
+        sqlx::query_scalar("SELECT captured_at FROM readings ORDER BY seq DESC LIMIT 1")
+            .fetch_optional(&mut db)
+            .await?;
+    ensure!(
+        newest.is_some_and(|at| at >= since && at <= asterion_protocol::unix_time().unwrap_or(0)),
+        "尚未读到本次服务启动后的采样"
+    );
+    Ok(())
+}
+
+pub async fn export(path: &Path, cursor: &Cursor) -> Result<Batch> {
+    let mut db = reader(path).await?;
     let mut tx = db.begin().await?;
     let (stream, interval_secs): (String, i64) =
         sqlx::query_as("SELECT stream,interval_secs FROM metadata WHERE id=1")
