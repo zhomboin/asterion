@@ -212,7 +212,7 @@ SetEnv HOME={work} PATH={work}/bin:/usr/local/bin:/usr/bin:/bin {"" if system_de
         raise
     assert api(node + "/metrics")["samples"][-1]["sample"]["memory"]["total_bytes"] > 0
     if system_deploy or os.environ.get("TEST_DEPLOY_CHECKS"):
-        check_deployment(api, node, password, work, system_deploy)
+        check_deployment(api, node, password, work, system_deploy, target)
         return
     if os.environ.get("TEST_COLLECTOR_ONLY"):
         check_collector(work, stack, sshd, node, api, launch, wait)

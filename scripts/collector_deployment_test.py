@@ -1,7 +1,6 @@
 """通过面板实际使用的接口核对部署确认、任务结果与远端服务。"""
 
 import json
-import os
 from pathlib import Path
 import secrets
 import subprocess
@@ -9,7 +8,7 @@ import time
 import urllib.error
 
 
-def check_deployment(api, node, password, work, install):
+def check_deployment(api, node, password, work, install, target):
     status_path = node + "/collector-deployment"
     status = api(status_path)
     assert status["artifact_available"] and len(status["revision"]) == 64, status
@@ -84,17 +83,37 @@ def check_deployment(api, node, password, work, install):
         assert "ASTERION_COLLECTOR_RETENTION_DAYS=3" in config
         assert "ASTERION_COLLECTOR_MAX_MIB=32" in config
         assert "ASTERION_COLLECTOR_INTERVAL_SECS=5" in config
-        with_reader = ["sudo", "runuser", "-u", os.environ["USER"], "--"]
+        ssh = [
+            "ssh",
+            "-F",
+            "/dev/null",
+            "-T",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            f"UserKnownHostsFile={work / 'known_hosts'}",
+            "-i",
+            str(work / target["identity_file"]),
+            "-p",
+            str(target["port"]),
+            "-l",
+            target["user"],
+            target["host"],
+        ]
+        database = "/var/lib/asterion-collector/history.db"
         subprocess.run(
-            [*with_reader, "test", "-r", "/var/lib/asterion-collector/history.db"],
-            check=True,
-        )
-        subprocess.run(
-            [*with_reader, "test", "!", "-w", "/var/lib/asterion-collector/history.db"],
+            [
+                *ssh,
+                f"test -r {database} && test ! -w {database} || {{ id; namei -l {database}; exit 1; }}",
+            ],
             check=True,
         )
         with_data = subprocess.check_output(
-            [*with_reader, "/usr/local/bin/asterion-collector", "export"],
+            [*ssh, "/usr/local/bin/asterion-collector export"],
             input=b'{"args":{"stream":"","seq":0}}\n',
         )
         stream = json.loads(with_data)["value"]["collector"]["stream"]
