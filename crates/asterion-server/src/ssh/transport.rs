@@ -96,6 +96,15 @@ pub(super) async fn call(
     } else {
         REMOTE
     };
+    let collector_command;
+    let remote = if kind == "sample" {
+        collector_command = format!(
+            "if command -v asterion-collector >/dev/null 2>&1; then exec asterion-collector export; fi\n{remote}"
+        );
+        collector_command.as_str()
+    } else {
+        remote
+    };
     let io = async {
         let password = target.password_revision().is_some();
         let mut child = target

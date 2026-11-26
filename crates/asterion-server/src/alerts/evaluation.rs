@@ -18,17 +18,17 @@ struct Rule {
     breach_since: Option<i64>,
     last_sample_at: Option<i64>,
     ssh_online_until: Option<i64>,
+    collector_interval: Option<u64>,
     now: i64,
 }
 
 pub async fn evaluate(pool: &SqlitePool, sample_interval_secs: u64) -> Result<(), sqlx::Error> {
-    let max_gap = (sample_interval_secs.clamp(5, MAX_SAMPLE_INTERVAL_SECS) as i64 * 2).max(45);
     let mut after = String::new();
     loop {
         let mut tx = pool.begin().await?;
         let rules = sqlx::query_as::<_, Rule>(
-            "SELECT r.*, n.name AS node_name, n.ssh_online_until, unixepoch() AS now FROM alert_rules r
-             JOIN nodes n ON n.id = r.node_id WHERE r.enabled = 1 AND r.id > ? ORDER BY r.id LIMIT ?",
+            "SELECT r.*, n.name AS node_name, n.ssh_online_until, c.interval_secs AS collector_interval, unixepoch() AS now FROM alert_rules r
+             JOIN nodes n ON n.id = r.node_id LEFT JOIN collector_sync c ON c.node_id=n.id AND c.active=1 WHERE r.enabled = 1 AND r.id > ? ORDER BY r.id LIMIT ?",
         )
         .bind(&after)
         .bind(EVALUATION_BATCH)
@@ -38,6 +38,8 @@ pub async fn evaluate(pool: &SqlitePool, sample_interval_secs: u64) -> Result<()
             if rule.metric == "offline" {
                 offline(&mut tx, rule).await?;
             } else {
+                let interval = rule.collector_interval.unwrap_or(sample_interval_secs);
+                let max_gap = (interval.clamp(5, MAX_SAMPLE_INTERVAL_SECS) as i64 * 2).max(45);
                 metric(&mut tx, rule, max_gap).await?;
             }
         }

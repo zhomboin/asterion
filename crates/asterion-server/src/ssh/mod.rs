@@ -1,5 +1,8 @@
 mod auth;
 pub use auth::{askpass, is_askpass};
+mod collector;
+#[cfg(test)]
+mod collector_tests;
 mod config;
 mod direct;
 pub mod host_key;
@@ -139,9 +142,10 @@ async fn site(
                 let id = id.clone();
                 let target = target.clone();
                 let period = bus.sample_interval_secs();
+                let retention = bus.retention_days();
                 jobs.spawn(async move {
                     if let Ok(_permit) = slots.acquire().await {
-                        sample(&pool, &id, &target, period).await;
+                        sample(&pool, &id, &target, period, retention).await;
                     }
                     None
                 });
@@ -246,19 +250,49 @@ async fn terminal(
         .await
 }
 
-async fn sample(pool: &SqlitePool, id: &str, target: &Target, period: u64) {
-    let response = transport::call(target, "sample", json!({}), 10, None).await;
-    let result = if let TaskReply::Failure { code, .. } = &response
-        && code == "password_denied"
-        && let Some(revision) = target.password_revision()
-    {
-        auth::pause_password(pool, id, revision).await
-    } else {
-        save_sample(pool, id, period, response).await
-    };
-    if let Err(error) = result {
-        tracing::warn!(%error,node_id=id,"无法保存 SSH 采样");
+async fn sample(pool: &SqlitePool, id: &str, target: &Target, period: u64, retention: (u64, u64)) {
+    if let Err(error) = sync_samples(pool, id, target, period, retention).await {
+        tracing::warn!(%error,node_id=id,"SSH 采样同步失败");
+        let _ = sqlx::query(
+            "UPDATE nodes SET ssh_error='采集器同步失败，请查看面板运行日志' WHERE id=?",
+        )
+        .bind(id)
+        .execute(pool)
+        .await;
     }
+}
+
+async fn sync_samples(
+    pool: &SqlitePool,
+    id: &str,
+    target: &Target,
+    period: u64,
+    retention: (u64, u64),
+) -> anyhow::Result<()> {
+    // 每轮给积压数据多个有界批次，随后让出节点和全局 SSH 工作槽。
+    for _ in 0..8 {
+        let cursor = collector::cursor(pool, id).await?;
+        let response = transport::call(target, "sample", json!(cursor), 10, None).await;
+        match response {
+            TaskReply::Success { mut value } if value.get("collector").is_some() => {
+                let batch = serde_json::from_value(value["collector"].take())?;
+                if !collector::ingest(pool, id, &cursor, batch, period, retention).await? {
+                    break;
+                }
+            }
+            TaskReply::Failure { ref code, .. }
+                if code == "password_denied" && target.password_revision().is_some() =>
+            {
+                auth::pause_password(pool, id, target.password_revision().unwrap()).await?;
+                break;
+            }
+            reply => {
+                save_sample(pool, id, period, reply).await?;
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn save_sample(
@@ -275,6 +309,10 @@ async fn save_sample(
             .bind((period * 2 + 15) as i64).bind(value["os"].as_str()).bind(value["arch"].as_str())
             .bind(value["wsl_distro"].as_str()).bind(id).execute(&mut *tx).await?;
         if updated.rows_affected() > 0 {
+            sqlx::query("UPDATE collector_sync SET active=0 WHERE node_id=? AND active=1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
             crate::monitor::store_metrics(&mut tx, id, &value["sample"]).await?;
         }
         return tx.commit().await;
@@ -284,6 +322,9 @@ async fn save_sample(
             "SSH 连接失败，请核对地址、端口、已信任的主机指纹和登录凭据"
         }
         TaskReply::Failure { code, .. } if code == "timeout" => "SSH 采样超时",
+        TaskReply::Failure { code, .. } if code == "collector_unavailable" => {
+            "无法读取远端采集器，请检查 systemd 服务和 SSH 账号的读取权限"
+        }
         _ => "SSH 采样失败，请检查节点 Python 3 与 /proc 读取权限",
     };
     sqlx::query("UPDATE nodes SET ssh_online_until=MIN(COALESCE(ssh_online_until,unixepoch()),unixepoch()), ssh_error=? WHERE id=?")

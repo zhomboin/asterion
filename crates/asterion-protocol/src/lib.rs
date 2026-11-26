@@ -1,3 +1,4 @@
+pub mod collector;
 pub mod managed;
 pub mod operation;
 

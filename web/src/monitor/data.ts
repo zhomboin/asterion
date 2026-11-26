@@ -34,6 +34,7 @@ export type MetricHistory = {
   range: MetricWindow;
   interval_seconds?: number;
   bucket_seconds?: number;
+  collector?: { pending: number; missed: number } | null;
   truncated?: boolean;
 };
 
