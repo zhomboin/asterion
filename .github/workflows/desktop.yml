@@ -1,0 +1,50 @@
+name: Windows 桌面版
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            desktop/target
+          key: desktop-msvc-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+      - run: cargo +stable fmt -- --check
+      - run: cargo +stable clippy --locked --all-targets -- -D warnings
+      - run: cargo +stable test --locked
+      - run: cargo +stable build --locked --release
+      - name: 验证桌面窗口启动和关闭
+        run: |
+          $env:ASTERION_DESKTOP_DATA_DIR = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid())
+          $app = Start-Process .\target\release\asterion-desktop.exe -PassThru
+          try {
+            $end = (Get-Date).AddSeconds(30)
+            do {
+              Start-Sleep -Milliseconds 250
+              $app.Refresh()
+            } until ($app.MainWindowHandle -ne 0 -or $app.HasExited -or (Get-Date) -gt $end)
+            if ($app.HasExited -or $app.MainWindowHandle -eq 0) { throw '未创建原生窗口' }
+            if (-not $app.CloseMainWindow() -or -not $app.WaitForExit(10000) -or $app.ExitCode -ne 0) { throw '桌面程序未正常退出' }
+            if (-not (Test-Path (Join-Path $env:ASTERION_DESKTOP_DATA_DIR desktop.sqlite3))) { throw '未建立桌面数据库' }
+          } finally {
+            if (-not $app.HasExited) { $app.Kill() }
+            $app.Dispose()
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asterion-desktop-windows-x64
+          path: desktop/target/release/asterion-desktop.exe
+          if-no-files-found: error
