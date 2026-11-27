@@ -14,7 +14,7 @@ for arch in x86_64 aarch64; do
         artifacts+=("$relative")
     fi
 done
-tar -czf "$archive" start.sh docs/{local,managed-operations,monitoring-and-operations,development,deployment,collector}.md \
+tar -czf "$archive" start.sh docs/{local,managed-operations,monitoring-and-operations,development,deployment,collector,windows-desktop}.md \
     deploy/ssh.example.json deploy/collector/asterion-collector.{service,conf,sysusers} \
     web/dist/index.html web/dist/static -C "$binary_dir" "${artifacts[@]}"
 printf '本机运行包 %s/%s\n' "$PWD" "$archive"
