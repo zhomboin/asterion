@@ -1,5 +1,8 @@
 name: Windows 桌面版
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 permissions:
   contents: read
 
@@ -29,16 +32,30 @@ jobs:
       - name: 验证桌面窗口启动和关闭
         run: |
           $env:ASTERION_DESKTOP_DATA_DIR = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid())
-          $app = Start-Process .\target\release\asterion-desktop.exe -PassThru
+          $db = Join-Path $env:ASTERION_DESKTOP_DATA_DIR desktop.sqlite3
+          $log = Join-Path $env:RUNNER_TEMP 'desktop-startup.stderr'
+          $app = Start-Process .\target\release\asterion-desktop.exe -RedirectStandardError $log -PassThru
           try {
-            $end = (Get-Date).AddSeconds(30)
+            $end = (Get-Date).AddSeconds(60)
             do {
               Start-Sleep -Milliseconds 250
               $app.Refresh()
-            } until ($app.MainWindowHandle -ne 0 -or $app.HasExited -or (Get-Date) -gt $end)
-            if ($app.HasExited -or $app.MainWindowHandle -eq 0) { throw '未创建原生窗口' }
-            if (-not $app.CloseMainWindow() -or -not $app.WaitForExit(10000) -or $app.ExitCode -ne 0) { throw '桌面程序未正常退出' }
-            if (-not (Test-Path (Join-Path $env:ASTERION_DESKTOP_DATA_DIR desktop.sqlite3))) { throw '未建立桌面数据库' }
+              if ($app.HasExited) { throw "窗口启动时退出，退出码 $($app.ExitCode)" }
+              $ready = $app.MainWindowTitle -eq 'Asterion · 节点工作台' -and (Test-Path $db)
+            } until ($ready -or (Get-Date) -gt $end)
+            if (-not $ready) { throw "窗口未就绪，当前标题 $($app.MainWindowTitle)" }
+            if (-not $app.WaitForInputIdle(30000)) { throw '原生窗口未处理输入' }
+            $end = (Get-Date).AddSeconds(30)
+            do {
+              $app.Refresh()
+              if ($app.HasExited) { break }
+              [void]$app.CloseMainWindow()
+            } until ($app.WaitForExit(2000) -or (Get-Date) -gt $end)
+            if (-not $app.HasExited) { throw "关闭请求超时，窗口响应状态 $($app.Responding)" }
+            if ($app.ExitCode -ne 0) { throw "窗口异常退出，退出码 $($app.ExitCode)" }
+          } catch {
+            if (Test-Path $log) { Get-Content $log -Tail 20 }
+            throw
           } finally {
             if (-not $app.HasExited) { $app.Kill() }
             $app.Dispose()
