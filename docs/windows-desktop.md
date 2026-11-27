@@ -53,8 +53,9 @@ Asterion 桌面版用于连接 Linux 节点，查看 CPU、内存与根分区使
    cargo fmt -- --check
    cargo clippy --locked --all-targets -- -D warnings
    cargo test --locked
-   cargo build --locked --release
-   .\target\release\asterion-desktop.exe
+   $env:RUSTFLAGS = '-C target-feature=+crt-static'
+   cargo build --locked --release --target x86_64-pc-windows-msvc
+   .\target\x86_64-pc-windows-msvc\release\asterion-desktop.exe
    ```
 
 4. 用自己的测试节点验证指纹确认、错误密码、私钥、采样和终端。运行 `top`，调整窗口大小，按 `q` 返回，再验证中文输入、复制和多行粘贴确认。退出后检查桌面进程已结束。测试账号、密钥、地址和数据库只放在私有临时目录。
