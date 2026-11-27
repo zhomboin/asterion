@@ -1,0 +1,70 @@
+name: Windows 桌面版
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            desktop/target
+          key: desktop-msvc-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+      - run: cargo +stable fmt -- --check
+      - run: cargo +stable clippy --locked --all-targets -- -D warnings
+      - run: cargo +stable test --locked
+      - name: 构建便携版
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo +stable build --locked --release --target x86_64-pc-windows-msvc
+      - name: 验证桌面窗口启动和关闭
+        run: |
+          $env:ASTERION_DESKTOP_DATA_DIR = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid())
+          $db = Join-Path $env:ASTERION_DESKTOP_DATA_DIR desktop.sqlite3
+          $log = Join-Path $env:RUNNER_TEMP 'desktop-startup.stderr'
+          $app = Start-Process .\target\x86_64-pc-windows-msvc\release\asterion-desktop.exe -RedirectStandardError $log -PassThru
+          try {
+            $end = (Get-Date).AddSeconds(60)
+            do {
+              Start-Sleep -Milliseconds 250
+              $app.Refresh()
+              if ($app.HasExited) { throw "窗口启动时退出，退出码 $($app.ExitCode)" }
+              $ready = $app.MainWindowTitle -eq 'Asterion · 节点工作台' -and (Test-Path $db)
+            } until ($ready -or (Get-Date) -gt $end)
+            if (-not $ready) { throw "窗口未就绪，当前标题 $($app.MainWindowTitle)" }
+            if (-not $app.WaitForInputIdle(30000)) { throw '原生窗口未处理输入' }
+            $end = (Get-Date).AddSeconds(30)
+            do {
+              $app.Refresh()
+              if ($app.HasExited) { break }
+              [void]$app.CloseMainWindow()
+            } until ($app.WaitForExit(2000) -or (Get-Date) -gt $end)
+            if (-not $app.HasExited) { throw "关闭请求超时，窗口响应状态 $($app.Responding)" }
+            if ($app.ExitCode -ne 0) { throw "窗口异常退出，退出码 $($app.ExitCode)" }
+          } catch {
+            if (Test-Path $log) { Get-Content $log -Tail 20 }
+            throw
+          } finally {
+            if (-not $app.HasExited) { $app.Kill() }
+            $app.Dispose()
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asterion-desktop-windows-x64
+          path: desktop/target/x86_64-pc-windows-msvc/release/asterion-desktop.exe
+          if-no-files-found: error

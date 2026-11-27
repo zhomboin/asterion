@@ -1,0 +1,21 @@
+[package]
+name = "asterion-desktop"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+asterion-protocol = { path = "../crates/asterion-protocol" }
+anyhow = "1"
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "tokio", "canvas", "advanced", "x11", "wayland"] }
+russh = { version = "0.65.4", default-features = false, features = ["ring", "rsa"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
+vt100 = "0.16"
+zeroize = "1"
+
+[dev-dependencies]
+rand = "0.10"
