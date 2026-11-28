@@ -40,16 +40,7 @@ fn hosts() -> PathBuf {
     "known_hosts".into()
 }
 
-pub(crate) fn valid_profile(name: &str) -> bool {
-    name.len() <= 64
-        && name
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
-}
+pub(crate) use crate::connection_name::valid_profile;
 
 pub(super) async fn load(local: bool) -> Result<Profiles> {
     let Some(file) = std::env::var_os("ASTERION_SSH_CONFIG_FILE") else {

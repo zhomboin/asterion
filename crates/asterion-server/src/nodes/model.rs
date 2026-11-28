@@ -92,7 +92,7 @@ fn nullable_name<'de, D: Deserializer<'de>>(
 }
 
 fn profile(value: String, local: bool) -> Result<String, ApiError> {
-    if crate::ssh::valid_connection(&value, local) {
+    if crate::connection_name::valid_connection(&value, local) {
         Ok(value)
     } else {
         Err(ApiError::INVALID_INPUT)

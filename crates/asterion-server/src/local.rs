@@ -10,6 +10,12 @@ use axum::response::IntoResponse;
 #[derive(Clone, Copy)]
 pub(crate) struct LocalPanel;
 
+/// 只供桌面进程内部调用，此入口不绑定网络地址。
+#[cfg(not(feature = "openssh"))]
+pub fn in_process(router: Router) -> Router {
+    router.layer(axum::Extension(LocalPanel))
+}
+
 pub fn router(router: Router, address: SocketAddr) -> Router {
     let authority = address.to_string();
     let origin = format!("http://{authority}");

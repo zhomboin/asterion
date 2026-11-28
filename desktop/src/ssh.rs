@@ -12,6 +12,7 @@ use crate::model::{Node, Sample, decode_sample};
 #[cfg(test)]
 mod tests;
 
+#[derive(Clone)]
 pub enum Credentials {
     Password(Zeroizing<String>),
     Key(PathBuf, Zeroizing<String>),
@@ -40,7 +41,28 @@ impl client::Handler for Verifier {
     }
 }
 
-pub type Session = Arc<client::Handle<Verifier>>;
+pub struct Connection {
+    handle: client::Handle<Verifier>,
+    node: Node,
+    pin: String,
+    auth: Credentials,
+}
+impl std::ops::Deref for Connection {
+    type Target = client::Handle<Verifier>;
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
+impl Connection {
+    pub async fn reconnect(&self) -> Result<Session> {
+        let result = login(self.node.clone(), Some(self.pin.clone()), self.auth.clone()).await?;
+        match result {
+            Login::Connected(session) => Ok(session),
+            Login::Verify(_) => bail!("部署后的主机指纹验证失败"),
+        }
+    }
+}
+pub type Session = Arc<Connection>;
 pub type Shell = Channel<client::Msg>;
 
 #[derive(Clone)]
@@ -77,7 +99,7 @@ pub async fn login(node: Node, expected: Option<String>, auth: Credentials) -> R
                 _ => return Err(err).context("SSH 握手失败，请检查地址、端口和网络"),
             },
         };
-        let result = match auth {
+        let result = match auth.clone() {
             Credentials::Password(password) => {
                 session
                     .authenticate_password(&node.user, password.as_str())
@@ -102,7 +124,12 @@ pub async fn login(node: Node, expected: Option<String>, auth: Credentials) -> R
             }
         };
         ensure!(result.success(), "SSH 认证被拒绝，请检查账号和凭据");
-        Ok(Login::Connected(Arc::new(session)))
+        Ok(Login::Connected(Arc::new(Connection {
+            handle: session,
+            node,
+            pin: expected.context("服务器尚未受信任")?,
+            auth,
+        })))
     })
     .await
     .context("SSH 连接超时")?
@@ -148,6 +175,37 @@ pub async fn terminal(session: &Session, cols: u16, rows: u16) -> Result<Shell> 
     let uid = command(session, "id -u", 32).await?;
     let uid = std::str::from_utf8(&uid)?.trim().parse::<u32>()?;
     ensure!(uid != 0, "交互终端需要使用非 root SSH 账号");
+    shell(session, cols, rows, None).await
+}
+
+pub async fn container_terminal(
+    remote: &crate::workspace::remote::Remote,
+    target: serde_json::Value,
+    cols: u16,
+    rows: u16,
+) -> Result<Shell> {
+    let reply = remote
+        .query(
+            "container_console_target",
+            serde_json::json!({"container":target}),
+            8,
+            None,
+        )
+        .await;
+    let asterion_protocol::TaskReply::Success { value } = reply else {
+        bail!("容器终端未获授权或目标已变化")
+    };
+    let id = value
+        .as_str()
+        .filter(|id| asterion_protocol::is_lower_hex(id, 64))
+        .context("容器身份无效")?;
+    let command = format!(
+        "exec /usr/bin/docker --host unix:///var/run/docker.sock exec -it --user 65534:65534 -- {id} /usr/bin/timeout -k 2 900 /bin/sh -i"
+    );
+    shell(&remote.current(), cols, rows, Some(command)).await
+}
+
+async fn shell(session: &Session, cols: u16, rows: u16, command: Option<String>) -> Result<Shell> {
     let mut channel = session.channel_open_session().await?;
     channel
         .request_pty(true, "xterm-256color", cols.into(), rows.into(), 0, 0, &[])
@@ -155,7 +213,11 @@ pub async fn terminal(session: &Session, cols: u16, rows: u16) -> Result<Shell> 
     acknowledge(&mut channel)
         .await
         .context("服务器无法分配 PTY")?;
-    channel.request_shell(true).await?;
+    if let Some(cmd) = command {
+        channel.exec(true, cmd).await?;
+    } else {
+        channel.request_shell(true).await?;
+    }
     acknowledge(&mut channel)
         .await
         .context("服务器未打开登录 Shell")?;

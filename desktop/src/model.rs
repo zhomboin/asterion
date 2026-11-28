@@ -70,7 +70,10 @@ pub fn decode_sample(bytes: &[u8]) -> Result<Sample> {
     let TaskReply::Success { value } = serde_json::from_slice(bytes)? else {
         bail!("节点采样失败");
     };
-    let s = &value["sample"];
+    from_value(&value["sample"])
+}
+
+pub fn from_value(s: &Value) -> Result<Sample> {
     ensure!(collector::valid_sample(s), "节点返回的采样格式无效");
     Ok(Sample {
         at: s["captured_at"].as_i64().unwrap(),

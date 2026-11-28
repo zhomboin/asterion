@@ -6,7 +6,7 @@ use asterion_protocol::{
 };
 use sqlx::SqlitePool;
 
-pub(super) async fn cursor(pool: &SqlitePool, node: &str) -> Result<Cursor, sqlx::Error> {
+pub async fn cursor(pool: &SqlitePool, node: &str) -> Result<Cursor, sqlx::Error> {
     let row: Option<(String, i64)> =
         sqlx::query_as("SELECT stream, seq FROM collector_sync WHERE node_id=? AND active=1")
             .bind(node)
@@ -17,7 +17,7 @@ pub(super) async fn cursor(pool: &SqlitePool, node: &str) -> Result<Cursor, sqlx
         .unwrap_or_default())
 }
 
-pub(super) async fn ingest(
+pub async fn ingest(
     pool: &SqlitePool,
     node: &str,
     requested: &Cursor,
@@ -156,4 +156,42 @@ pub(super) async fn ingest(
         .bind(node).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(!waiting_for_clock && seq < batch.newest_seq)
+}
+
+pub async fn save_sample(
+    pool: &SqlitePool,
+    id: &str,
+    period: u64,
+    reply: asterion_protocol::TaskReply,
+) -> Result<(), sqlx::Error> {
+    use asterion_protocol::TaskReply;
+    if let TaskReply::Success { value } = &reply
+        && crate::monitor::valid_sample(&value["sample"])
+    {
+        let mut tx = pool.begin().await?;
+        let updated = sqlx::query("UPDATE nodes SET last_seen_at=unixepoch(), ssh_online_until=unixepoch()+?, ssh_error=NULL, os=?, arch=?, wsl_distro=CASE WHEN kind='wsl' THEN ? END WHERE id=?")
+            .bind((period * 2 + 15) as i64).bind(value["os"].as_str()).bind(value["arch"].as_str())
+            .bind(value["wsl_distro"].as_str()).bind(id).execute(&mut *tx).await?;
+        if updated.rows_affected() > 0 {
+            sqlx::query("UPDATE collector_sync SET active=0 WHERE node_id=? AND active=1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            crate::monitor::store_metrics(&mut tx, id, &value["sample"]).await?;
+        }
+        return tx.commit().await;
+    }
+    let message = match &reply {
+        TaskReply::Failure { code, .. } if code == "offline" => {
+            "SSH 连接失败，请核对地址、端口、已信任的主机指纹和登录凭据"
+        }
+        TaskReply::Failure { code, .. } if code == "timeout" => "SSH 采样超时",
+        TaskReply::Failure { code, .. } if code == "collector_unavailable" => {
+            "无法读取远端采集器，请检查 systemd 服务和 SSH 账号的读取权限"
+        }
+        _ => "SSH 采样失败，请检查节点 Python 3 与 /proc 读取权限",
+    };
+    sqlx::query("UPDATE nodes SET ssh_online_until=MIN(COALESCE(ssh_online_until,unixepoch()),unixepoch()), ssh_error=? WHERE id=?")
+        .bind(message).bind(id).execute(pool).await?;
+    Ok(())
 }

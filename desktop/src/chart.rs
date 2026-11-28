@@ -8,8 +8,33 @@ pub const CPU: Color = Color::from_rgb(0.10, 0.43, 0.82);
 pub const MEMORY: Color = Color::from_rgb(0.05, 0.56, 0.45);
 pub const DISK: Color = Color::from_rgb(0.72, 0.40, 0.10);
 
-pub struct Chart<'a>(pub &'a [Sample]);
-impl<Message> canvas::Program<Message> for Chart<'_> {
+pub trait PointData {
+    fn time(&self) -> i64;
+    fn series(&self) -> [Option<f64>; 3];
+}
+impl PointData for Sample {
+    fn time(&self) -> i64 {
+        self.at
+    }
+    fn series(&self) -> [Option<f64>; 3] {
+        [self.cpu, self.memory, self.disk]
+    }
+}
+pub struct Network {
+    pub at: i64,
+    pub rx: Option<f64>,
+    pub tx: Option<f64>,
+}
+impl PointData for Network {
+    fn time(&self) -> i64 {
+        self.at
+    }
+    fn series(&self) -> [Option<f64>; 3] {
+        [self.rx, self.tx, None]
+    }
+}
+pub struct Chart<'a, P>(pub &'a [P], pub i64, pub f64);
+impl<Message, P: PointData> canvas::Program<Message> for Chart<'_, P> {
     type State = ();
     fn draw(
         &self,
@@ -30,20 +55,20 @@ impl<Message> canvas::Program<Message> for Chart<'_> {
             );
         }
         if let (Some(first), Some(last)) = (self.0.first(), self.0.last()) {
-            let span = (last.at - first.at).max(5) as f32;
+            let span = (last.time() - first.time()).max(5) as f32;
             for (idx, color) in [CPU, MEMORY, DISK].into_iter().enumerate() {
                 let mut previous: Option<(i64, Point)> = None;
                 for s in self.0 {
-                    let Some(value) = [s.cpu, s.memory, s.disk][idx] else {
+                    let Some(value) = s.series()[idx] else {
                         previous = None;
                         continue;
                     };
                     let p = Point::new(
-                        ((s.at - first.at) as f32 / span) * (w - 4.) + 2.,
-                        4. + (1. - value as f32 / 100.) * h,
+                        ((s.time() - first.time()) as f32 / span) * (w - 4.) + 2.,
+                        4. + (1. - (value / self.2.max(1.0)) as f32) * h,
                     );
                     if let Some((time, old)) = previous
-                        && s.at - time <= 15
+                        && s.time() - time <= self.1
                     {
                         f.stroke(
                             &Path::line(old, p),
@@ -52,7 +77,7 @@ impl<Message> canvas::Program<Message> for Chart<'_> {
                     } else {
                         f.fill(&Path::circle(p, 2.), color);
                     }
-                    previous = Some((s.at, p));
+                    previous = Some((s.time(), p));
                 }
             }
         }

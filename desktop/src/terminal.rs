@@ -21,9 +21,15 @@ pub enum Input {
     Size(u16, u16),
 }
 
-pub fn run(session: Session, cols: u16, rows: u16, input: mpsc::Receiver<Input>) -> Task<Event> {
+pub fn run(
+    session: Session,
+    cols: u16,
+    rows: u16,
+    input: mpsc::Receiver<Input>,
+    container: Option<(crate::workspace::remote::Remote, serde_json::Value)>,
+) -> Task<Event> {
     let events = iced::stream::channel(16, async move |mut output| {
-        let result = relay(session, cols, rows, input, &mut output).await;
+        let result = relay(session, cols, rows, input, &mut output, container).await;
         let reason = result
             .err()
             .map(|e| format!("终端已关闭 · {e}"))
@@ -39,9 +45,10 @@ async fn relay(
     rows: u16,
     mut input: mpsc::Receiver<Input>,
     output: &mut Sender<Event>,
+    container: Option<(crate::workspace::remote::Remote, serde_json::Value)>,
 ) -> anyhow::Result<()> {
     let mut channel = tokio::select! {
-        result = timeout(Duration::from_secs(15),ssh::terminal(&session,cols,rows)) => result??,
+        result = timeout(Duration::from_secs(15),async {match container {Some((remote,target))=>ssh::container_terminal(&remote,target,cols,rows).await,None=>ssh::terminal(&session,cols,rows).await}}) => result??,
         _ = input.recv() => return Ok(()),
     };
     output.send(Event::Open).await?;

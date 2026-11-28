@@ -3,6 +3,15 @@ name = "asterion-server"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["openssh"]
+openssh = []
+
+[[bin]]
+name = "asterion-server"
+path = "src/main.rs"
+required-features = ["openssh"]
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"

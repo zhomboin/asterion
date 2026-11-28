@@ -21,7 +21,7 @@ use crate::terminal::TerminalHub;
 use self::rate::LoginThrottle;
 use self::session::{LOCAL_SESSION, expire_cookie, issue_session, session_hash};
 
-pub use self::credentials::{bootstrap_admin, bootstrap_local_admin};
+pub use self::credentials::{bootstrap_admin, bootstrap_desktop_admin, bootstrap_local_admin};
 pub use self::session::AdminSession;
 
 pub fn routes() -> Router<SqlitePool> {
