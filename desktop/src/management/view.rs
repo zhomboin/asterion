@@ -3,6 +3,7 @@ use super::{
     forms::{FormKind, Spec},
     pages::{Kind, Page, string},
     resources,
+    selection::{self, Choice, Purpose},
 };
 use Kind::*;
 use axum::http::Method;
@@ -55,8 +56,8 @@ pub fn items<'a>(v: &'a Value, key: &str) -> &'a [Value] {
         .map_or(&[], Vec::as_slice)
 }
 
-pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
-    let modal = m.confirm.is_some() || m.form.is_some();
+pub fn page(m: &Manager, active: bool, registered: bool) -> Element<'_, Event> {
+    let modal = m.confirm.is_some() || m.form.is_some() || m.choosing();
     let mut top = row![
         text("Asterion").size(24),
         text("管理工作区").size(18),
@@ -69,10 +70,16 @@ pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
             .push(btn("SSH 连接", Event::Connect))
             .push(btn("锁定", Event::Lock));
     }
-    let body: Element<'_, Event> = if let Some(c) = &m.confirm {
+    let body: Element<'_, Event> = if let Some(picker) = &m.picker {
+        picker.view(m.busy)
+    } else if let Some(c) = &m.confirm {
         let mut box_ = column![section(c.title.clone())].spacing(12);
         if !c.action.is_null() {
             box_ = box_.push(facts::all(&c.action));
+        }
+        let expired = c.expired();
+        if expired {
+            box_ = box_.push(text("确认已过期，请返回重新准备操作"));
         }
         if let Some(end) = c.prepared.get("expires_at") {
             box_ = box_.push(text(format!(
@@ -96,7 +103,7 @@ pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
         }
         box_.push(
             row![
-                button("确认执行").on_press_maybe((!m.busy).then_some(Event::Confirm)),
+                button("确认执行").on_press_maybe((!m.busy && !expired).then_some(Event::Confirm)),
                 btn("返回", Event::Dismiss)
             ]
             .spacing(8),
@@ -104,6 +111,21 @@ pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
         .into()
     } else if let Some(form) = &m.form {
         let mut fields = column![section(form.title())].spacing(9);
+        if matches!(form.spec.kind, FormKind::Asset | FormKind::Rule) {
+            fields = fields.push(
+                row![
+                    text("归属节点").width(210),
+                    btn(
+                        form.spec.data["node_name"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("选择节点"),
+                        Event::Choose(Choice::Open(Purpose::Form))
+                    )
+                ]
+                .spacing(8),
+            );
+        }
         for (i, f) in form.fields.iter().enumerate() {
             let input: Element<'_, Event> = if f.choices.is_empty() {
                 text_input(&f.label, &f.value)
@@ -123,11 +145,30 @@ pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
             );
         }
         if form.spec.kind == FormKind::File {
-            fields = fields.push(text(string(&form.spec.data, "path"))).push(
-                text_editor(&form.editor)
-                    .on_action(Event::Editor)
-                    .height(300),
-            );
+            if form.mixed_eol() {
+                fields = fields.push(text("文件使用多种换行符，保存时会统一为首行的格式。"));
+            }
+            if let Some(resolved) = form.spec.data["resolved"]
+                .as_str()
+                .filter(|r| Some(*r) != form.spec.data["path"].as_str())
+            {
+                fields = fields.push(text(format!("链接目标 · {resolved}")));
+            }
+            fields = fields
+                .push(text(string(&form.spec.data, "path")))
+                .push(
+                    text_editor(&form.editor)
+                        .on_action(Event::Editor)
+                        .height(300),
+                )
+                .push(
+                    row![
+                        btn("复制内容", Event::CopyEditor),
+                        button("重新读取")
+                            .on_press_maybe((!m.busy && !m.discard).then_some(Event::ReloadFile))
+                    ]
+                    .spacing(8),
+                );
         }
         if form.spec.kind == FormKind::Container {
             fields = fields.push(facts::all(&form.spec.data["profiles"][form.get("profile")]));
@@ -202,19 +243,31 @@ pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
                 .spacing(6),
             );
         }
-        if matches!(m.page.kind, Assets | Jobs) && !m.node.is_empty() {
+        if matches!(m.page.kind, Assets | Jobs | Alerts) {
             content = content.push(
                 row![
                     btn("全部节点", Event::Filter("node_id", String::new())),
                     btn(
-                        format!("当前节点 · {}", m.name),
-                        Event::Filter("node_id", m.node.clone())
+                        format!(
+                            "筛选节点 · {}",
+                            m.page.item["node_name"].as_str().unwrap_or("选择")
+                        ),
+                        Event::Choose(Choice::Open(Purpose::Filter))
                     )
                 ]
                 .spacing(6),
             );
         }
         if m.page.kind == Assets {
+            content = content.push(
+                row![
+                    text_input("标签", &m.tag)
+                        .on_input(Event::Tag)
+                        .on_submit(Event::Filter("tag", m.tag.clone())),
+                    btn("筛选标签", Event::Filter("tag", m.tag.clone()))
+                ]
+                .spacing(6),
+            );
             let types = [
                 "全部方式",
                 "docker",
@@ -242,12 +295,19 @@ pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
             ));
         }
         if !m.value.is_null() {
-            content = content.push(details(m, active));
+            content = content.push(details(m, active, registered));
         }
-        let more = m.value["has_more"] == true
+        let more = m
+            .local_rows()
+            .is_some_and(|rows| rows.len() > m.offset + 24)
+            || m.value["has_more"] == true
             || (m.page.kind == Processes && m.value.as_array().is_some_and(|a| a.len() > 24));
         if more || m.offset > 0 {
-            let size = if m.page.kind == Pins { 12 } else { 24 };
+            let size = if matches!(m.page.kind, Pins | PinLive) {
+                12
+            } else {
+                24
+            };
             let mut paging = row![text(format!("第 {} 页", m.offset / size + 1))].spacing(8);
             if m.offset > 0 {
                 paging = paging.push(btn("上一页", Event::Offset(m.offset.saturating_sub(size))));
@@ -290,22 +350,47 @@ fn nav_item(k: Kind, m: &Manager) -> Element<'_, Event> {
         .into()
 }
 
-fn details(m: &Manager, active: bool) -> Element<'_, Event> {
+fn details(m: &Manager, active: bool, registered: bool) -> Element<'_, Event> {
     let v = &m.value;
     let node = &m.node;
     let p = &m.page;
     let mut c = Column::new().spacing(8);
     match p.kind {
         Nodes => {
+            for (node, e) in &m.connection_errors {
+                c = c.push(text(format!("{node} · 自动连接失败：{e}")));
+            }
             if let Some(counts) = v["status_counts"].as_object() {
                 let n = |k| counts.get(k).and_then(Value::as_u64).unwrap_or(0);
                 c = c.push(text(format!(
-                    "在线 {}     离线 {}     待连接 {}",
+                    "在线率 {:.1}%     在线 {}     离线 {}     待连接 {}",
+                    100.0 * n("online") as f64
+                        / (n("online") + n("offline") + n("pending")).max(1) as f64,
                     n("online"),
                     n("offline"),
                     n("pending")
                 )));
             }
+            c = c.push(section("进行中告警"));
+            for a in items(&m.overview, "alerts") {
+                c = c.push(btn(
+                    format!(
+                        "{} · {} {}",
+                        string(a, "node_name"),
+                        facts::metric(&string(a, "metric")),
+                        string(a, "unit")
+                    ),
+                    selection::alert_target(a),
+                ));
+            }
+            if let Some(e) = m.overview["error"].as_str() {
+                c = c.push(text(e));
+            } else if items(&m.overview, "alerts").is_empty() {
+                c = c.push(text("暂无进行中告警"));
+            }
+            c = c
+                .push(link("查看全部告警", Alerts, "active", Value::Null))
+                .push(section("节点"));
             for n in items(v, "nodes") {
                 c = c.push(
                     row![
@@ -319,10 +404,19 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                     .spacing(9)
                     .align_y(Alignment::Center),
                 );
+                c = c.push(facts::facts(
+                    n,
+                    &["kind", "host_name", "last_seen_at", "os", "arch"],
+                ));
                 if n["metrics"].is_object() {
                     c = c.push(facts::facts(
                         &n["metrics"],
-                        &["cpu_percent", "memory_percent", "disk_percent"],
+                        &[
+                            "cpu_percent",
+                            "memory_percent",
+                            "disk_percent",
+                            "observed_at",
+                        ],
                     ));
                 }
             }
@@ -339,6 +433,8 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                     &[
                         "name",
                         "ssh_profile",
+                        "id",
+                        "wsl_distro",
                         "host_name",
                         "kind",
                         "status",
@@ -353,17 +449,32 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                     row![
                         edit("编辑资料", FormKind::Node, v, ""),
                         if active {
-                            btn("打开 SSH 终端", Event::Terminal)
+                            button("打开 SSH 终端")
+                                .on_press_maybe(m.terminal_enabled.then_some(Event::Terminal))
                         } else {
-                            btn("连接 SSH", Event::Reconnect)
+                            button("连接 SSH")
+                                .on_press_maybe((!registered).then_some(Event::Reconnect))
                         }
                     ]
                     .spacing(6),
                 );
-            if active {
+            c = c
+                .push(link(
+                    "该节点的任务",
+                    Jobs,
+                    "",
+                    json!({"node_id":node,"node_name":m.name}),
+                ))
+                .push(link(
+                    "该节点的资产",
+                    Assets,
+                    "",
+                    json!({"node_id":node,"node_name":m.name}),
+                ));
+            if registered {
                 c = c.push(btn("断开此节点", Event::Disconnect));
             } else {
-                c = c.push(mutation(
+                c = c.push(btn("更改 SSH 地址", Event::Rebind)).push(mutation(
                     "移除节点",
                     Method::DELETE,
                     format!("/nodes/{node}"),
@@ -386,11 +497,23 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                 ]
                 .spacing(6),
             );
-            let gap = v["bucket_seconds"]
-                .as_i64()
-                .unwrap_or(15)
-                .max(v["interval_seconds"].as_i64().unwrap_or(15))
-                * 3;
+            let bucket = v["bucket_seconds"].as_i64().unwrap_or(15);
+            let interval = v["interval_seconds"].as_i64().unwrap_or(15);
+            let gap = if p.kind == Trends {
+                bucket * 3 / 2
+            } else {
+                bucket.max(interval) * 18 / 10
+            };
+            let duration = match p.or(periods[0]) {
+                "1h" => 3600,
+                "24h" => 86400,
+                "7d" => 7 * 86400,
+                _ => 30 * 86400,
+            };
+            let window = Some(crate::chart::Window {
+                seconds: duration,
+                bucket: if bucket >= interval { bucket } else { 0 },
+            });
             c = c
                 .push(
                     row![
@@ -401,7 +524,7 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                     .spacing(12),
                 )
                 .push(
-                    canvas(crate::chart::Chart(&m.samples, gap, 100.))
+                    canvas(crate::chart::Chart(&m.samples, gap, 100., window))
                         .height(148)
                         .width(Length::Fill),
                 );
@@ -422,11 +545,16 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                         .spacing(12),
                     )
                     .push(
-                        canvas(crate::chart::Chart(&m.network, gap, peak))
+                        canvas(crate::chart::Chart(&m.network, gap, peak, window))
                             .height(92)
                             .width(Length::Fill),
                     );
             }
+            c = c.push(row![
+                text(format!("{} 前", p.or(periods[0]))),
+                space::horizontal(),
+                text("现在")
+            ]);
             if let Some(last) = items(v, "samples").last() {
                 c = c.push(facts::all(if p.kind == Metrics {
                     &last["sample"]
@@ -436,14 +564,15 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
             } else {
                 c = c.push(text("此时段没有采样"));
             }
+            if v["truncated"] == true {
+                c = c.push(text("较早的采样已截断"));
+            }
             if v["collector"].is_object() {
                 c = c.push(facts::all(&v["collector"]));
             }
         }
         Assets => {
-            if !node.is_empty() {
-                c = c.push(edit("新建资产", FormKind::Asset, &Value::Null, ""));
-            }
+            c = c.push(edit("新建资产", FormKind::Asset, &Value::Null, ""));
             for a in items(v, "assets") {
                 c = c.push(
                     row![
@@ -462,6 +591,16 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
             }
         }
         Asset => {
+            if let Some(url) = v["repo_url"]
+                .as_str()
+                .filter(|s| crate::local_program::web_address(s))
+            {
+                c = c.push(btn("打开仓库", Event::Repository(url.into())));
+            }
+            c = c.push(btn(
+                string(v, "node_name"),
+                selection::target(v, Page::new(Node)),
+            ));
             c = c.push(facts::facts(
                 v,
                 &[
@@ -476,6 +615,9 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                     "notes",
                     "verified_at",
                     "last_seen_at",
+                    "source",
+                    "created_at",
+                    "updated_at",
                 ],
             ));
             c = c.push(
@@ -493,7 +635,7 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                         "关联发现记录",
                         Discoveries,
                         p.key.clone(),
-                        json!({"node":v["node_id"]})
+                        json!({"node":v["node_id"],"bound":items(v,"bindings").iter().map(|b|&b["id"]).collect::<Vec<_>>()})
                     )
                 ]
                 .spacing(8),
@@ -501,7 +643,17 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
             for b in items(v, "bindings") {
                 c = c.push(
                     row![
-                        text(string(b, "name")),
+                        facts::facts(
+                            b,
+                            &[
+                                "name",
+                                "kind",
+                                "resource_id",
+                                "source",
+                                "observed_at",
+                                "bound_at"
+                            ]
+                        ),
                         mutation(
                             "解除关联",
                             Method::DELETE,
@@ -516,7 +668,10 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
             }
         }
         Discoveries => {
-            for d in items(v, "discoveries") {
+            for d in items(v, "discoveries")
+                .iter()
+                .filter(|d| !items(&p.item, "bound").contains(&d["id"]))
+            {
                 c = c.push(
                     row![
                         text(format!("{} · {}", string(d, "kind"), string(d, "name"))),
@@ -532,20 +687,23 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                     .spacing(6),
                 );
             }
-            if items(v, "discoveries").is_empty() {
-                c = c.push(text("暂无发现记录"));
+            if items(v, "discoveries")
+                .iter()
+                .all(|d| items(&p.item, "bound").contains(&d["id"]))
+            {
+                c = c.push(text("本页没有可关联的发现记录"));
             }
         }
         Rules | Alerts => {
-            if p.kind == Rules && !node.is_empty() {
-                c = c.push(edit("添加当前节点规则", FormKind::Rule, &Value::Null, ""));
+            if p.kind == Rules {
+                c = c.push(edit("添加规则", FormKind::Rule, &Value::Null, ""));
             }
             if p.kind == Alerts {
                 c = c.push(
                     row![
-                        link("活动", Alerts, "active", Value::Null),
-                        link("已恢复", Alerts, "resolved", Value::Null),
-                        link("全部", Alerts, "all", Value::Null)
+                        link("活动", Alerts, "active", p.item.clone()),
+                        link("已恢复", Alerts, "resolved", p.item.clone()),
+                        link("全部", Alerts, "all", p.item.clone())
                     ]
                     .spacing(6),
                 );
@@ -567,6 +725,14 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                         "resolved_at",
                         "resolution",
                     ],
+                ));
+                c = c.push(btn(
+                    if a["metric"] == "service" {
+                        "查看服务状态记录"
+                    } else {
+                        "查看节点"
+                    },
+                    selection::alert_target(a),
                 ));
                 if p.kind == Rules {
                     c = c.push(
@@ -615,10 +781,16 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
             }
         }
         Job => {
+            c = c.push(btn(
+                string(v, "node_name"),
+                selection::target(v, Page::new(Node)),
+            ));
             c = c.push(facts::facts(
                 v,
                 &[
                     "node_name",
+                    "id",
+                    "cancel_requested_at",
                     "actor",
                     "action",
                     "state",
@@ -642,7 +814,10 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                     .spacing(8),
                 );
             }
-            if v["can_cancel"] == true {
+            if let Some(why) = facts::failure(&string(v, "error_code")) {
+                c = c.push(text(why));
+            }
+            if v["can_cancel"] == true && v["cancel_requested_at"].is_null() {
                 c = c.push(mutation(
                     "取消任务",
                     Method::POST,
@@ -653,7 +828,12 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                 ));
             }
         }
-        Settings => c = c.push(facts::all(v)),
+        Settings => {
+            c = c
+                .push(text("当前账号 · local"))
+                .push(link("管理节点连接", Nodes, "", Value::Null))
+                .push(facts::all(v))
+        }
         _ => return resources::panel(m),
     }
     c.into()

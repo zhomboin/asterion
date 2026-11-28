@@ -1,5 +1,6 @@
 use super::remote::Remote;
 use asterion_protocol::{TaskReply, unix_time};
+use asterion_server::config::MonitoringConfig;
 use asterion_server::{
     collector_deploy, samples,
     ssh_bus::{Control, Dispatch, SshBus},
@@ -20,48 +21,83 @@ impl Drop for Running {
     }
 }
 
-pub fn start(pool: SqlitePool, bus: &Arc<SshBus>, id: String, remote: Remote) -> Running {
-    let mut requests = bus.attach(&id, true);
+pub fn start(
+    pool: SqlitePool,
+    bus: &Arc<SshBus>,
+    id: String,
+    remote: Remote,
+    config: MonitoringConfig,
+) -> Running {
+    let bus = bus.clone();
+    let mut subscription = bus.attach(&id, true);
     let handle = tokio::spawn(async move {
-        let mut timer = interval(Duration::from_secs(15));
-        timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        let mut jobs = JoinSet::new();
-        let mut cancels = HashMap::<String, oneshot::Sender<()>>::new();
-        let mut sampling = false;
         loop {
-            tokio::select! {
-                _=timer.tick(), if !sampling => {
-                    if remote.session.is_closed() { break; }
-                    sampling=true;
-                    let (pool,id,remote)=(pool.clone(),id.clone(),remote.clone());
-                    jobs.spawn(async move {
-                        if sync(&pool,&id,&remote).await.is_err() {
-                            let _=samples::save_sample(&pool,&id,15,TaskReply::failure("offline","采样中断")).await;
-                        }
-                        None
-                    });
-                }
-                Some(result)=jobs.join_next(), if !jobs.is_empty() => {
-                    match result {Ok(Some(id))=>{cancels.remove(&id);},Ok(None)=>sampling=false,Err(_)=>break}
-                }
-                command=requests.next()=>match command {
-                    Control::Cancel(id)=>{if let Some(tx)=cancels.remove(&id) {let _=tx.send(());}}
-                    Control::Task(task)=>{
-                        if jobs.len()>=9 {let _=task.response.send(TaskReply::failure("busy","节点任务繁忙"));continue;}
-                        let (tx,rx)=oneshot::channel();
-                        let key=task.request.request_id.clone();
-                        cancels.insert(key.clone(),tx);
-                        let (remote,pool)=(remote.clone(),pool.clone());
-                        jobs.spawn(async move {
-                            dispatch(remote,pool,task,rx).await;
-                            Some(key)
-                        });
-                    }
+            serve(&pool, &id, &remote, subscription, config).await;
+            let _ = samples::save_sample(
+                &pool,
+                &id,
+                config.interval,
+                TaskReply::failure("offline", "SSH 连接已断开"),
+            )
+            .await;
+            let mut delay = 5;
+            loop {
+                tokio::time::sleep(Duration::from_secs(delay)).await;
+                match remote.reconnect().await {
+                    Ok(()) => break,
+                    Err(e) if e.downcast_ref::<crate::ssh::RetryStopped>().is_some() => return,
+                    Err(_) => delay = (delay * 2).min(60),
                 }
             }
+            subscription = bus.attach(&id, true);
         }
     });
     Running(handle.abort_handle())
+}
+async fn serve(
+    pool: &SqlitePool,
+    id: &str,
+    remote: &Remote,
+    mut requests: asterion_server::ssh_bus::Subscription,
+    config: MonitoringConfig,
+) {
+    let mut timer = interval(Duration::from_secs(config.interval));
+    timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut jobs = JoinSet::new();
+    let mut cancels = HashMap::<String, oneshot::Sender<()>>::new();
+    let mut sampling = false;
+    loop {
+        tokio::select! {
+            _=timer.tick(), if !sampling => {
+                if remote.current().is_closed() {break;}
+                sampling=true;
+                let (pool,id,remote)=(pool.clone(),id.to_owned(),remote.clone());
+                jobs.spawn(async move {
+                    if sync(&pool,&id,&remote,config).await.is_err() {
+                        let _=samples::save_sample(&pool,&id,config.interval,TaskReply::failure("offline","采样中断")).await;
+                    }
+                    None
+                });
+            }
+            Some(result)=jobs.join_next(), if !jobs.is_empty() => {
+                match result {Ok(Some(id))=>{cancels.remove(&id);},Ok(None)=>sampling=false,Err(_)=>break}
+            }
+            command=requests.next()=>match command {
+                Control::Cancel(id)=>{if let Some(tx)=cancels.remove(&id) {let _=tx.send(());}}
+                Control::Task(task)=>{
+                    if jobs.len()>=9 {let _=task.response.send(TaskReply::failure("busy","节点任务繁忙"));continue;}
+                    let (tx,rx)=oneshot::channel();
+                    let key=task.request.request_id.clone();
+                    cancels.insert(key.clone(),tx);
+                    let (remote,pool)=(remote.clone(),pool.clone());
+                    jobs.spawn(async move {
+                        dispatch(remote,pool,task,rx).await;
+                        Some(key)
+                    });
+                }
+            }
+        }
+    }
 }
 
 async fn dispatch(remote: Remote, pool: SqlitePool, task: Dispatch, cancel: oneshot::Receiver<()>) {
@@ -105,18 +141,32 @@ async fn dispatch(remote: Remote, pool: SqlitePool, task: Dispatch, cancel: ones
     let _ = response.send(reply);
 }
 
-async fn sync(pool: &SqlitePool, id: &str, remote: &Remote) -> anyhow::Result<()> {
+async fn sync(
+    pool: &SqlitePool,
+    id: &str,
+    remote: &Remote,
+    config: MonitoringConfig,
+) -> anyhow::Result<()> {
     for _ in 0..8 {
         let cursor = samples::cursor(pool, id).await?;
         match remote.query("sample", json!(cursor), 10, None).await {
             TaskReply::Success { mut value } if value.get("collector").is_some() => {
                 let batch = serde_json::from_value(value["collector"].take())?;
-                if !samples::ingest(pool, id, &cursor, batch, 15, (7, 90)).await? {
+                if !samples::ingest(
+                    pool,
+                    id,
+                    &cursor,
+                    batch,
+                    config.interval,
+                    (config.raw_days, config.trend_days),
+                )
+                .await?
+                {
                     break;
                 }
             }
             reply => {
-                samples::save_sample(pool, id, 15, reply).await?;
+                samples::save_sample(pool, id, config.interval, reply).await?;
                 break;
             }
         }

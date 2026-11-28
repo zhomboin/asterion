@@ -125,3 +125,96 @@ async fn workspace_keeps_credentials_local_and_requires_confirmation() -> Result
     again.pool.close().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn rebind_preserves_history_and_rejects_conflicts_and_unfinished_jobs() -> Result<()> {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.local");
+    std::fs::create_dir_all(&base)?;
+    let dir = tempfile::tempdir_in(base)?;
+    let old = Node::parse("prior.invalid", "22", "member")?;
+    let new = Node::parse("next.invalid", "22", "member")?;
+    let other = Node::parse("claimed.invalid", "22", "member")?;
+    let password = Zeroizing::new(format!("{:032x}", rand::random::<u128>()));
+    let mut store = Store::open_in(dir.path())?;
+    let old_key = store.connected(&old)?;
+    store.trust(&old, "previous-pin")?;
+    store.save(
+        old_key,
+        &crate::model::Sample {
+            at: 17,
+            cpu: Some(2.0),
+            memory: None,
+            disk: None,
+        },
+    )?;
+    store.save_login(&old, crate::Method::Key, "prior-key", None)?;
+    store.set_auto(&old, true)?;
+    let core = Workspace::open(
+        dir.path().into(),
+        password.clone(),
+        vec![old.clone(), other.clone()],
+    )
+    .await?;
+    let id = core.bind(&old, None).await?;
+    let prior = format!("ssh://{old}");
+    let binding = || Some((id.clone(), prior.clone()));
+    assert!(!store.nodes()?.contains(&new));
+    store.trust(&new, "next-pin")?;
+    let asset = core
+        .api(
+            Method::POST,
+            "/assets",
+            json!({"node_id":id,"name":"示例","management":"process"}),
+        )
+        .await?;
+    assert!(core.bind(&other, binding()).await.is_err());
+    assert!(
+        core.bind(&new, Some((id.clone(), "stale".into())))
+            .await
+            .is_err()
+    );
+    let prepared = core
+        .api(
+            Method::POST,
+            &format!("/nodes/{id}/operations"),
+            json!({"type":"command","name":"uptime","parameters":{}}),
+        )
+        .await?;
+    assert!(core.bind(&new, binding()).await.is_err());
+    core.api(
+        Method::POST,
+        &format!(
+            "/operations/{}/cancel",
+            prepared["task_id"].as_str().unwrap()
+        ),
+        Value::Null,
+    )
+    .await?;
+    assert!(!store.nodes()?.contains(&new));
+    assert_eq!(core.bind(&new, binding()).await?, id);
+    assert!(store.nodes()?.contains(&new));
+    let new_key = store.connected(&new)?;
+    assert_eq!(core.bind(&new, None).await?, id);
+    assert_eq!(
+        core.api(
+            Method::GET,
+            &format!("/assets/{}", asset["id"].as_str().unwrap()),
+            Value::Null
+        )
+        .await?["node_id"],
+        id
+    );
+    assert_eq!(store.history(new_key)?[0].at, 17);
+    assert_eq!(store.fingerprint(&old)?.as_deref(), Some("previous-pin"));
+    assert_eq!(store.fingerprint(&new)?.as_deref(), Some("next-pin"));
+    assert!(store.auto_nodes()?.is_empty());
+    assert!(store.saved_login(&old)?.is_none() && store.saved_login(&new)?.is_none());
+    core.pool.close().await;
+    drop(core);
+    store.connected(&old)?;
+    let reopened = Workspace::open(dir.path().into(), password, store.nodes()?).await?;
+    assert_ne!(reopened.bind(&old, None).await?, id);
+    assert_eq!(reopened.bind(&new, None).await?, id);
+    reopened.pool.close().await;
+    Ok(())
+}

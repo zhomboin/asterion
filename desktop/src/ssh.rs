@@ -16,11 +16,21 @@ mod tests;
 pub enum Credentials {
     Password(Zeroizing<String>),
     Key(PathBuf, Zeroizing<String>),
+    Config(Arc<crate::ssh_config::Config>),
 }
 
+#[derive(Debug)]
+pub struct RetryStopped(&'static str);
+impl std::fmt::Display for RetryStopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for RetryStopped {}
 pub struct Verifier {
     expected: Option<String>,
-    observed: Option<oneshot::Sender<String>>,
+    trust: Option<(Node, crate::host_trust::Trust)>,
+    observed: Option<oneshot::Sender<Result<String, String>>>,
 }
 
 impl client::Handler for Verifier {
@@ -32,10 +42,18 @@ impl client::Handler for Verifier {
         let PublicKeyOrCertificate::PublicKey { key, .. } = offered else {
             return Ok(false);
         };
+        if let Some((node, trust)) = &self.trust
+            && let Err(error) = trust.check(node, key).await
+        {
+            if let Some(tx) = self.observed.take() {
+                let _ = tx.send(Err(error.to_string()));
+            }
+            return Ok(false);
+        }
         let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
         let trusted = self.expected.as_deref() == Some(&fingerprint);
         if let Some(tx) = self.observed.take() {
-            let _ = tx.send(fingerprint);
+            let _ = tx.send(Ok(fingerprint));
         }
         Ok(trusted)
     }
@@ -54,6 +72,12 @@ impl std::ops::Deref for Connection {
     }
 }
 impl Connection {
+    pub fn config(&self) -> Option<&crate::ssh_config::Config> {
+        match &self.auth {
+            Credentials::Config(c) => Some(c),
+            _ => None,
+        }
+    }
     pub async fn reconnect(&self) -> Result<Session> {
         let result = login(self.node.clone(), Some(self.pin.clone()), self.auth.clone()).await?;
         match result {
@@ -71,40 +95,75 @@ pub enum Login {
     Connected(Session),
 }
 
+async fn handshake(
+    node: &Node,
+    expected: Option<String>,
+    profile: Option<&crate::ssh_config::Config>,
+) -> Result<Result<client::Handle<Verifier>, String>> {
+    let (tx, mut rx) = oneshot::channel();
+    let verifier = Verifier {
+        expected: expected.clone(),
+        observed: Some(tx),
+        trust: profile.map(|p| (node.clone(), p.trust.clone())),
+    };
+    let config = client::Config {
+        keepalive_interval: Some(Duration::from_secs(15)),
+        keepalive_max: 2,
+        ..Default::default()
+    };
+    let config = Arc::new(config);
+    let attempt = if let Some(stream) = profile.map(|p| p.transport()).transpose()?.flatten() {
+        client::connect_stream(config, stream, verifier).await
+    } else {
+        client::connect(config, (node.host.as_str(), node.port), verifier).await
+    };
+    match attempt {
+        Ok(session) => Ok(Ok(session)),
+        Err(err) => match rx.try_recv() {
+            Ok(Err(reason)) => {
+                Err(anyhow::anyhow!(reason)).context(RetryStopped("主机信任检查失败，已停止连接"))
+            }
+            Ok(Ok(key)) if expected.is_none() => Ok(Err(key)),
+            Ok(Ok(key)) if expected.as_ref() != Some(&key) => {
+                Err(RetryStopped("服务器指纹与已信任记录不符，已阻止连接").into())
+            }
+            _ => Err(err).context("SSH 握手失败，请检查地址、端口和网络"),
+        },
+    }
+}
+pub async fn probe(node: Node, profile: Option<crate::ssh_config::Config>) -> Result<String> {
+    match timeout(
+        Duration::from_secs(20),
+        handshake(&node, None, profile.as_ref()),
+    )
+    .await
+    .context("核对指纹超时")??
+    {
+        Err(key) => Ok(key),
+        Ok(_) => bail!("未取得主机指纹"),
+    }
+}
 pub async fn login(node: Node, expected: Option<String>, auth: Credentials) -> Result<Login> {
     timeout(Duration::from_secs(25), async {
-        let (tx, mut rx) = oneshot::channel();
-        let verifier = Verifier {
-            expected: expected.clone(),
-            observed: Some(tx),
+        let profile = match &auth {
+            Credentials::Config(c) => Some(c.as_ref()),
+            _ => None,
         };
-        let config = client::Config {
-            keepalive_interval: Some(Duration::from_secs(15)),
-            keepalive_max: 2,
-            ..Default::default()
+        let mut session = match handshake(&node, expected.clone(), profile).await? {
+            Ok(s) => s,
+            Err(key) => return Ok(Login::Verify(key)),
         };
-        let mut session = match client::connect(
-            Arc::new(config),
-            (node.host.as_str(), node.port),
-            verifier,
-        )
-        .await
-        {
-            Ok(session) => session,
-            Err(err) => match rx.try_recv() {
-                Ok(key) if expected.is_none() => return Ok(Login::Verify(key)),
-                Ok(key) if expected.as_ref() != Some(&key) => {
-                    bail!("服务器指纹与已信任记录不符，已阻止连接")
-                }
-                _ => return Err(err).context("SSH 握手失败，请检查地址、端口和网络"),
-            },
-        };
-        let result = match auth.clone() {
-            Credentials::Password(password) => {
-                session
-                    .authenticate_password(&node.user, password.as_str())
-                    .await?
+        let accepted = match auth.clone() {
+            Credentials::Config(c) => {
+                c.authenticate(&mut session)
+                    .await
+                    .context(RetryStopped("本机 SSH 身份认证失败，已暂停重连"))?;
+                true
             }
+            Credentials::Password(password) => session
+                .authenticate_password(&node.user, password.as_str())
+                .await?
+                .success(),
             Credentials::Key(path, passphrase) => {
                 let key = tokio::task::spawn_blocking(move || {
                     load_secret_key(
@@ -121,9 +180,12 @@ pub async fn login(node: Node, expected: Option<String>, auth: Credentials) -> R
                         PrivateKeyWithHashAlg::new(Arc::new(key), hash),
                     )
                     .await?
+                    .success()
             }
         };
-        ensure!(result.success(), "SSH 认证被拒绝，请检查账号和凭据");
+        if !accepted {
+            return Err(RetryStopped("SSH 认证被拒绝，请检查账号和凭据").into());
+        }
         Ok(Login::Connected(Arc::new(Connection {
             handle: session,
             node,

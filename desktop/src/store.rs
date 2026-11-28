@@ -6,6 +6,9 @@ use std::{fs, path::PathBuf};
 pub struct Store(Connection);
 
 impl Store {
+    pub(super) fn db(&self) -> &Connection {
+        &self.0
+    }
     pub fn workspace_configured() -> Result<bool> {
         let path = Self::directory()?.join("workspace.sqlite3");
         if !path.try_exists()? {
@@ -44,6 +47,8 @@ impl Store {
         db.execute_batch("PRAGMA foreign_keys=ON;
             CREATE TABLE IF NOT EXISTS hosts(host TEXT,port INTEGER,fingerprint TEXT NOT NULL,PRIMARY KEY(host,port));
             CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY,host TEXT NOT NULL,port INTEGER NOT NULL,user TEXT NOT NULL,UNIQUE(host,port,user));
+            CREATE TABLE IF NOT EXISTS auto_nodes(address TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS saved_logins(address TEXT PRIMARY KEY,method TEXT NOT NULL,source TEXT NOT NULL,secret BLOB);
             CREATE TABLE IF NOT EXISTS samples(node INTEGER REFERENCES nodes(id),at INTEGER,cpu REAL,memory REAL,disk REAL,PRIMARY KEY(node,at));")?;
         Ok(Self(db))
     }
@@ -62,6 +67,43 @@ impl Store {
         .collect::<rusqlite::Result<_>>()?)
     }
 
+    pub fn move_shortcut(&mut self, old: &str, new: &str) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
+        let nodes = self.nodes()?;
+        let find = |address: &str| nodes.iter().find(|n| format!("ssh://{n}") == address);
+        let Some(prior) = find(old) else {
+            return Ok(());
+        };
+        let target = Node::from_address(new)?;
+        let tx = self.0.transaction()?;
+        let id = |n: &Node| {
+            tx.query_row(
+                "SELECT id FROM nodes WHERE host=? AND port=? AND user=?",
+                params![n.host, n.port, n.user],
+                |r| r.get::<_, i64>(0),
+            )
+        };
+        tx.execute(
+            "INSERT OR IGNORE INTO nodes(host,port,user) VALUES(?,?,?)",
+            params![target.host, target.port, target.user],
+        )?;
+        let (a, b) = (id(prior)?, id(&target)?);
+        tx.execute("INSERT OR IGNORE INTO samples(node,at,cpu,memory,disk) SELECT ?,at,cpu,memory,disk FROM samples WHERE node=?",params![b,a])?;
+        tx.execute("DELETE FROM samples WHERE node=?1 OR (node=?2 AND at < (SELECT at FROM samples WHERE node=?2 ORDER BY at DESC LIMIT 1 OFFSET ?3))",params![a,b,HISTORY-1])?;
+        tx.execute("DELETE FROM nodes WHERE id=?", [a])?;
+        tx.execute(
+            "DELETE FROM auto_nodes WHERE address=?",
+            [prior.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM saved_logins WHERE address=?",
+            [prior.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
     pub fn forget(&mut self, address: &str) -> Result<()> {
         let Some(node) = self
             .nodes()?
@@ -79,6 +121,11 @@ impl Store {
             )
             .optional()?;
         if let Some(id) = id {
+            tx.execute("DELETE FROM auto_nodes WHERE address=?", [node.to_string()])?;
+            tx.execute(
+                "DELETE FROM saved_logins WHERE address=?",
+                [node.to_string()],
+            )?;
             tx.execute("DELETE FROM samples WHERE node=?", [id])?;
             tx.execute("DELETE FROM nodes WHERE id=?", [id])?;
         }

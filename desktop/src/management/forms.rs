@@ -233,41 +233,100 @@ impl Form {
                 }
             }
             Container => {
-                let profiles = data["profiles"]
+                let current = data["target"]["profile"].as_str();
+                let options = data["profiles"]
                     .as_object()
                     .into_iter()
                     .flat_map(|o| o.keys())
                     .map(String::as_str)
                     .collect::<Vec<_>>();
-                add(
-                    "profile",
-                    "配置方案",
-                    profiles.first().copied().unwrap_or("").into(),
-                    &profiles,
-                );
-                add(
-                    "restart",
-                    "重启策略（留空使用方案默认值）",
-                    String::new(),
-                    &[],
-                );
-                add(
-                    "ports",
-                    "可选端口（宿主:容器，逗号分隔）",
-                    String::new(),
-                    &[],
-                );
-                add("mounts", "可选挂载名称（逗号分隔）", String::new(), &[]);
+                let profile = current
+                    .filter(|p| options.contains(p))
+                    .or_else(|| options.first().copied())
+                    .unwrap_or("");
+                add("profile", "配置方案", profile.into(), &options);
+                let saved = if current == Some(profile) {
+                    &data["target"]["settings"]
+                } else {
+                    &Value::Null
+                };
+                form.container_options(profile, saved);
             }
             File => {}
         }
         form
+    }
+    fn container_options(&mut self, profile: &str, saved: &Value) {
+        self.fields.truncate(1);
+        let spec = &self.spec.data["profiles"][profile];
+        let value = saved["restart"]
+            .as_str()
+            .or(spec["restart"].as_str())
+            .unwrap_or("no")
+            .to_owned();
+        let mut choices = super::view::items(spec, "restart_choices")
+            .iter()
+            .filter_map(|s| s.as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        if choices.is_empty() {
+            choices.push(value.clone());
+        }
+        self.fields.push(Field {
+            key: "restart".into(),
+            label: "重启策略".into(),
+            value,
+            choices,
+        });
+        let mut toggle = |key, label, checked| {
+            self.fields.push(Field {
+                key,
+                label,
+                value: if checked { "启用" } else { "停用" }.into(),
+                choices: vec!["启用".into(), "停用".into()],
+            })
+        };
+        for pair in super::view::items(spec, "port_choices") {
+            let key = format!("{}:{}", pair[0], pair[1]);
+            toggle(
+                format!("port:{key}"),
+                format!("端口 {key}"),
+                super::view::items(saved, "ports").contains(pair),
+            );
+        }
+        for (key, mount) in spec["mount_choices"].as_object().into_iter().flatten() {
+            let source = mount["volume"]
+                .as_str()
+                .or(mount["source"].as_str())
+                .unwrap_or(key);
+            toggle(
+                format!("mount:{key}"),
+                format!("{source} → {}", string(mount, "destination")),
+                super::view::items(saved, "mounts").contains(&json!(key)),
+            );
+        }
+    }
+    pub fn change(&mut self, i: usize, value: String) {
+        if let Some(f) = self.fields.get_mut(i) {
+            let profile = self.spec.kind == Container && f.key == "profile" && f.value != value;
+            f.value = value.clone();
+            if profile {
+                self.container_options(&value, &Value::Null);
+            }
+            self.dirty = true;
+        }
     }
     pub fn get(&self, k: &str) -> &str {
         self.fields
             .iter()
             .find(|f| f.key == k)
             .map_or("", |f| &f.value)
+    }
+    pub fn mixed_eol(&self) -> bool {
+        self.spec.data["content"]
+            .as_str()
+            .unwrap_or("")
+            .split(&self.eol)
+            .any(|line| line.contains(['\r', '\n']))
     }
     pub fn title(&self) -> &'static str {
         match self.spec.kind {
@@ -307,6 +366,12 @@ impl Form {
             })
         };
         let prepare = |action| Submit::Prepare(action, None);
+        if matches!(self.spec.kind, Asset | Rule) {
+            ensure!(
+                d["node_id"].as_str().filter(|s| !s.is_empty()).is_some() || !node.is_empty(),
+                "请选择归属节点"
+            );
+        }
         Ok(match self.spec.kind {
             Node => write(
                 "/nodes",
@@ -352,7 +417,12 @@ impl Form {
                     .replace('\r', "\n")
                     .replace('\n', &self.eol);
                 ensure!(
-                    Some(content.as_str()) != d["content"].as_str(),
+                    self.editor.text()
+                        != d["content"]
+                            .as_str()
+                            .unwrap_or("")
+                            .replace("\r\n", "\n")
+                            .replace('\r', "\n"),
                     "文件内容未修改"
                 );
                 ensure!(
@@ -384,21 +454,24 @@ impl Form {
                 )
             }
             Container => {
-                let ports = split(g("ports"))
-                    .iter()
-                    .map(|p| -> Result<[u16; 2]> {
-                        let (a, b) = p.split_once(':').context("端口格式应为宿主:容器")?;
-                        Ok([a.parse()?, b.parse()?])
-                    })
-                    .collect::<Result<Vec<_>>>()?;
                 let profile = g("profile");
-                let restart = if g("restart").is_empty() {
-                    d["profiles"][profile]["restart"].as_str().unwrap_or("no")
-                } else {
-                    g("restart")
-                };
+                ensure!(d["profiles"][profile].is_object(), "所选配置方案不可用");
+                let restart = g("restart");
+                let spec = &d["profiles"][profile];
+                let enabled =
+                    |prefix: &str, key: &str| self.get(&format!("{prefix}:{key}")) == "启用";
+                let ports = super::view::items(spec, "port_choices")
+                    .iter()
+                    .filter(|v| enabled("port", &format!("{}:{}", v[0], v[1])))
+                    .collect::<Vec<_>>();
+                let mounts = spec["mount_choices"]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|o| o.keys())
+                    .filter(|k| enabled("mount", k))
+                    .collect::<Vec<_>>();
                 prepare(
-                    json!({"type":"managed","change":{"key":d["key"],"verb":self.spec.mode,"revision":d["revision"],"profile":profile,"settings":{"restart":restart,"ports":ports,"mounts":split(g("mounts"))}}}),
+                    json!({"type":"managed","change":{"key":d["key"],"verb":self.spec.mode,"revision":d["revision"],"profile":profile,"settings":{"restart":restart,"ports":ports,"mounts":mounts}}}),
                 )
             }
         })

@@ -1,6 +1,6 @@
 # 产品需求
 
-[Windows 原生工作区](windows-desktop.md)和 Linux 面板均可通过 SSH 管理节点。下表列出两种客户端提供的业务功能。
+[Windows 原生工作区](windows-desktop.md)和 Linux 面板均可通过 SSH 管理节点。下表列出两种客户端提供的业务功能。具体入口、平台差异及验证范围见[桌面功能对照](desktop-parity.md)。
 
 Asterion 面板在用户自己的 Linux 或 WSL 电脑上运行。打开本机面板，填写 SSH 地址或别名即可监控服务器、管理容器并执行命令。在节点的「监控部署」中安装[服务器端采集器](collector.md)后，节点可以离线保存主机指标，面板重新连通后自动补回历史。
 

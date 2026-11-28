@@ -23,6 +23,7 @@ pub fn binding(press: KeyPress) -> Option<Binding<Message>> {
             Named::Space => b" ",
             Named::Enter => b"\r".as_slice(),
             Named::Backspace => b"\x7f",
+            Named::Tab if modifiers.shift() => return Binding::from_key_press(press),
             Named::Tab => b"\t",
             Named::Escape => b"\x1b",
             Named::ArrowUp => b"\x1b[A",
@@ -33,6 +34,19 @@ pub fn binding(press: KeyPress) -> Option<Binding<Message>> {
             Named::End => b"\x1b[F",
             Named::PageUp => b"\x1b[5~",
             Named::PageDown => b"\x1b[6~",
+            Named::Insert => b"\x1b[2~",
+            Named::F1 => b"\x1bOP",
+            Named::F2 => b"\x1bOQ",
+            Named::F3 => b"\x1bOR",
+            Named::F4 => b"\x1bOS",
+            Named::F5 => b"\x1b[15~",
+            Named::F6 => b"\x1b[17~",
+            Named::F7 => b"\x1b[18~",
+            Named::F8 => b"\x1b[19~",
+            Named::F9 => b"\x1b[20~",
+            Named::F10 => b"\x1b[21~",
+            Named::F11 => b"\x1b[23~",
+            Named::F12 => b"\x1b[24~",
             Named::Delete => b"\x1b[3~",
             _ => return Binding::from_key_press(press),
         }
@@ -42,10 +56,13 @@ pub fn binding(press: KeyPress) -> Option<Binding<Message>> {
             if ch == b'v' {
                 return Some(Binding::Custom(Message::Paste));
             }
-            if !ch.is_ascii_lowercase() {
+            if !ch.is_ascii_lowercase() && !b"@[\\]^_".contains(&ch) {
                 return None;
             }
-            vec![ch - 96]
+            vec![ch.to_ascii_uppercase() & 31]
+        }
+        Key::Character(s) if modifiers.alt() && !modifiers.control() && s.chars().count() == 1 => {
+            [vec![0x1b], s.as_bytes().to_vec()].concat()
         }
         _ => return Binding::from_key_press(press),
     };

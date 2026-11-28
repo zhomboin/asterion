@@ -32,6 +32,17 @@ pub enum Action {
         Session,
         Result<(String, Arc<Running>, Remote), String>,
     ),
+    Rebound(
+        u64,
+        Node,
+        Session,
+        Result<crate::workspace::resume::Attachment, String>,
+    ),
+    Resumed(
+        u64,
+        Node,
+        Result<(Session, crate::workspace::resume::Attachment), String>,
+    ),
     Manage(Event),
     Finished(u64, Event),
 }
@@ -45,6 +56,7 @@ pub struct Connection {
 pub struct Desk {
     pub visible: bool,
     pub active: HashMap<String, Connection>,
+    pub restoring: HashMap<String, iced::task::Handle>,
     pub container: Option<(Remote, Value)>,
     core: Option<Arc<Workspace>>,
     manager: Manager,
@@ -60,6 +72,7 @@ impl Default for Desk {
         Self {
             visible: false,
             active: HashMap::new(),
+            restoring: HashMap::new(),
             container: None,
             core: None,
             manager: Default::default(),
@@ -73,6 +86,14 @@ impl Default for Desk {
     }
 }
 impl Desk {
+    pub fn unlocked(&self) -> bool {
+        self.core.is_some()
+    }
+    pub fn expired(&self) -> bool {
+        self.core
+            .as_ref()
+            .is_some_and(|core| core.expires_at <= chrono::Utc::now().timestamp())
+    }
     pub fn dirty(&self) -> bool {
         self.visible && self.manager.dirty()
     }
@@ -88,7 +109,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .view(
                 d.active
                     .get(&d.manager.node)
-                    .is_some_and(|c| !c.session.is_closed()),
+                    .is_some_and(|c| !c.remote.current().is_closed()),
+                d.active.contains_key(&d.manager.node)
+                    || d.manager.value["ssh_profile"]
+                        .as_str()
+                        .and_then(|s| s.strip_prefix("ssh://"))
+                        .is_some_and(|s| d.restoring.contains_key(s)),
             )
             .map(msg);
     }
@@ -156,16 +182,40 @@ impl App {
             move |r| Message::Desk(Action::Attached(epoch, node.clone(), session.clone(), r)),
         ))
     }
+    pub(super) fn finish_rebind(&mut self, node: Node, session: Session) -> Result<Task<Message>> {
+        let core = self.desk.core.clone().context("请先解锁工作区")?;
+        let pair = self
+            .connection
+            .rebind
+            .clone()
+            .context("请选择要更改的节点")?;
+        let (n, s) = (node.clone(), session.clone());
+        let epoch = self.epoch;
+        self.connection.committing = true;
+        self.busy = true;
+        Ok(Task::perform(
+            async move {
+                core.attach_as(n, s, Some(pair))
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            move |r| Message::Desk(Action::Rebound(epoch, node.clone(), session.clone(), r)),
+        ))
+    }
     pub(super) fn refresh_management(&mut self) -> Task<Message> {
         let d = &mut self.desk;
         let m = &mut d.manager;
-        if !d.visible || m.busy || m.form.is_some() || m.confirm.is_some() || !m.error.is_empty() {
+        if !d.visible || m.busy || m.choosing() || m.form.is_some() || m.confirm.is_some() {
             return Task::none();
         }
         if let Some(core) = &d.core
             && matches!(
                 m.page.kind,
-                Kind::Job
+                Kind::Nodes
+                    | Kind::Node
+                    | Kind::Pins
+                    | Kind::MonitorHistory
+                    | Kind::Job
                     | Kind::Alerts
                     | Kind::Metrics
                     | Kind::Trends
@@ -210,6 +260,7 @@ impl App {
         match action {
             Action::Show => {
                 self.close_term();
+                self.connection.rebind = None;
                 self.desk.visible = true;
                 self.desk.error.clear();
                 if let Some(core) = self.desk.core.clone() {
@@ -251,15 +302,83 @@ impl App {
                 let core = r.map_err(anyhow::Error::msg)?;
                 self.desk.first = false;
                 self.desk.core = Some(core.clone());
-                return Ok(Task::batch([
-                    self.desk.manager.load(core).map(done),
+                self.desk.manager.terminal_enabled = self.terminal_allowed;
+                let mut tasks = vec![
+                    self.desk.manager.load(core.clone()).map(done),
                     self.attach_workspace()?,
-                ]));
+                ];
+                let gate = Arc::new(tokio::sync::Semaphore::new(2));
+                for node in self
+                    .store
+                    .as_ref()
+                    .context("本机数据不可用")?
+                    .auto_nodes()?
+                {
+                    if self.session.is_some() && self.node().is_ok_and(|n| n == node) {
+                        continue;
+                    }
+                    let (core, gate, n) = (core.clone(), gate.clone(), node.clone());
+                    let address = node.to_string();
+                    let (task, handle) = Task::perform(
+                        async move {
+                            let _permit = gate.acquire_owned().await?;
+                            core.resume(&n).await
+                        },
+                        move |r| {
+                            Message::Desk(Action::Resumed(
+                                generation,
+                                node.clone(),
+                                r.map_err(|e| format!("{e:#}")),
+                            ))
+                        },
+                    )
+                    .abortable();
+                    self.desk.restoring.insert(address, handle.abort_on_drop());
+                    tasks.push(task);
+                }
+                return Ok(Task::batch(tasks));
+            }
+            Action::Resumed(g, node, r) if g == generation && self.desk.core.is_some() => {
+                if self.desk.restoring.remove(&node.to_string()).is_none() {
+                    return Ok(Task::none());
+                }
+                match r {
+                    Ok((session, (id, worker, remote))) => {
+                        self.desk.active.entry(id).or_insert(Connection {
+                            node,
+                            session,
+                            _worker: worker,
+                            remote,
+                        });
+                    }
+                    Err(e) => {
+                        self.desk
+                            .manager
+                            .connection_errors
+                            .insert(node.to_string(), e);
+                    }
+                }
+            }
+            Action::Rebound(e, node, session, r) if e == self.epoch && self.desk.core.is_some() => {
+                self.connection.committing = false;
+                self.busy = false;
+                let attachment = r.map_err(|error| {
+                    self.secret = Default::default();
+                    anyhow::Error::msg(error)
+                })?;
+                self.connection.rebind = None;
+                self.connected(&node, session.clone())?;
+                self.desk.visible = true;
+                return self.desktop_action(Action::Attached(e, node, session, Ok(attachment)));
             }
             Action::Attached(e, node, session, r)
                 if e == self.epoch && self.desk.core.is_some() =>
             {
                 let (id, worker, remote) = r.map_err(anyhow::Error::msg)?;
+                self.desk
+                    .manager
+                    .connection_errors
+                    .remove(&node.to_string());
                 self.desk.active.insert(
                     id.clone(),
                     Connection {
@@ -281,8 +400,14 @@ impl App {
             }
             Action::Manage(Event::Disconnect) => {
                 let id = self.desk.manager.node.clone();
+                if let Some(address) = self.desk.manager.value["ssh_profile"]
+                    .as_str()
+                    .and_then(|s| s.strip_prefix("ssh://"))
+                {
+                    self.desk.restoring.remove(address);
+                }
                 if let Some(conn) = self.desk.active.remove(&id) {
-                    if self.node().is_ok_and(|n| Workspace::id(&n) == id) {
+                    if self.node().is_ok_and(|n| n == conn.node) {
                         self.session = None;
                         self.close_term();
                         self.epoch += 1;
@@ -302,18 +427,29 @@ impl App {
                     ));
                 }
             }
-            Action::Manage(e @ (Event::Connect | Event::Reconnect)) => {
+            Action::Manage(e @ (Event::Connect | Event::Reconnect | Event::Rebind)) => {
                 if let Some(store) = &self.store {
                     self.nodes = store.nodes()?;
                 }
-                if matches!(e, Event::Reconnect) {
+                self.connection.rebind = None;
+                if matches!(e, Event::Reconnect | Event::Rebind) {
                     let node = self
                         .nodes
                         .iter()
-                        .find(|n| Workspace::id(n) == self.desk.manager.node)
+                        .find(|n| self.desk.manager.value["ssh_profile"] == format!("ssh://{n}"))
                         .cloned()
                         .context("没有找到已保存的 SSH 地址")?;
-                    let _ = self.handle(Message::Select(node))?;
+                    ensure!(
+                        !self.desk.restoring.contains_key(&node.to_string()),
+                        "正在恢复此节点的 SSH 连接"
+                    );
+                    let _ = self.handle(Message::Select(node.clone()))?;
+                    if matches!(e, Event::Rebind) {
+                        self.desk.active.remove(&self.desk.manager.node);
+                        self.connection.rebind =
+                            Some((self.desk.manager.node.clone(), format!("ssh://{node}")));
+                        self.changed_destination();
+                    }
                 }
                 // 管理工作区已登记的连接继续采样，新的连接有独立的身份和请求代次。
                 self.close_term();
@@ -335,6 +471,11 @@ impl App {
                 self.history.clear();
                 let core = self.desk.core.take();
                 let active = std::mem::take(&mut self.desk.active);
+                self.connection.rebind = None;
+                self.connection.committing = false;
+                self.busy = false;
+                self.changed_destination();
+                self.key_path.clear();
                 let old_generation = self.desk.generation;
                 self.desk = Desk {
                     visible: true,
@@ -361,13 +502,14 @@ impl App {
                 ));
             }
             Action::Manage(e @ (Event::Terminal | Event::ContainerTerminal(_))) => {
+                ensure!(self.terminal_allowed, "本机已停用交互终端");
                 let d = &self.desk;
                 let conn = d
                     .active
                     .get(&d.manager.node)
-                    .filter(|c| !c.session.is_closed())
+                    .filter(|c| !c.remote.current().is_closed())
                     .context("请先通过 SSH 连接这个节点")?;
-                let session = conn.session.clone();
+                let session = conn.remote.current();
                 let node = conn.node.clone();
                 let target = if let Event::ContainerTerminal(v) = e {
                     Some((conn.remote.clone(), v))

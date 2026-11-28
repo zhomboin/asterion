@@ -1,7 +1,10 @@
 mod facts;
 pub mod forms;
+mod list;
 pub mod pages;
+mod registry;
 mod resources;
+mod selection;
 mod view;
 
 use crate::{model::Sample, workspace::Workspace};
@@ -18,6 +21,9 @@ use zeroize::Zeroizing;
 pub enum Event {
     Go(Page),
     SelectNode(String, String),
+    NodePage(String, String, Page),
+    Choose(selection::Choice),
+    Tag(String),
     Refresh,
     Filter(&'static str, String),
     Search(String),
@@ -38,15 +44,21 @@ pub enum Event {
     Completed(u64, Result<Value, String>),
     RestoreDraft,
     CopyDraft,
+    ReloadFile,
+    CopyEditor,
+    Repository(String),
     ContainerTerminal(Value),
     Connect,
     Reconnect,
+    Rebind,
     Disconnect,
     Terminal,
     Lock,
 }
 enum Pending {
     Read,
+    ReloadFile(String),
+    Choices,
     Write(Page, bool),
     Prepare(Option<String>),
     Confirm(String),
@@ -62,20 +74,34 @@ pub struct Confirm {
     prepared: Value,
     content: Option<String>,
 }
+impl Confirm {
+    fn expired(&self) -> bool {
+        self.prepared["expires_at"]
+            .as_i64()
+            .is_some_and(|end| end <= chrono::Utc::now().timestamp())
+    }
+}
 pub struct Manager {
     pub page: Page,
     pub node: String,
     pub name: String,
     pub search: String,
     pub offset: usize,
+    pub tag: String,
+    picker: Option<selection::Picker>,
+    pub overview: Value,
+    pub live: Value,
     pub value: Value,
     pub samples: Vec<Sample>,
     pub network: Vec<crate::chart::Network>,
+    pub connection_errors: std::collections::HashMap<String, String>,
     pub error: String,
     pub busy: bool,
     pub form: Option<Form>,
     pub confirm: Option<Confirm>,
     pub discard: bool,
+    reload_after_discard: bool,
+    pub terminal_enabled: bool,
     draft: Option<(String, Page, Form)>,
     back: Vec<(Page, String, usize)>,
     serial: u64,
@@ -90,14 +116,21 @@ impl Default for Manager {
             name: String::new(),
             search: String::new(),
             offset: 0,
+            tag: String::new(),
+            picker: None,
+            overview: Value::Null,
+            live: Value::Null,
             value: Value::Null,
             samples: vec![],
             network: vec![],
+            connection_errors: Default::default(),
             error: String::new(),
             busy: false,
             form: None,
             confirm: None,
             discard: false,
+            reload_after_discard: false,
+            terminal_enabled: false,
             draft: None,
             back: vec![],
             serial: 0,
@@ -107,13 +140,16 @@ impl Default for Manager {
     }
 }
 impl Manager {
-    pub fn view(&self, active: bool) -> Element<'_, Event> {
-        view::page(self, active)
+    pub fn view(&self, active: bool, registered: bool) -> Element<'_, Event> {
+        view::page(self, active, registered)
     }
     pub fn has_draft(&self) -> bool {
         self.draft
             .as_ref()
             .is_some_and(|(id, _, _)| self.page.kind == Kind::Job && self.page.key == *id)
+    }
+    pub fn choosing(&self) -> bool {
+        self.picker.is_some()
     }
     pub fn dirty(&self) -> bool {
         self.form.as_ref().is_some_and(|f| f.dirty)
@@ -129,6 +165,22 @@ impl Manager {
     }
     pub fn load(&mut self, core: Arc<Workspace>) -> Task<Event> {
         let path = self.page.path(&self.node, &self.search, self.offset);
+        let overview = self.page.kind == Kind::Nodes;
+        let registry =
+            (self.page.kind == Kind::Pins || self.page.kind == Kind::PinLive).then(|| {
+                (
+                    Page::detail(Kind::Pins, self.page.or("process"), Value::Null).path(
+                        &self.node,
+                        "",
+                        self.offset,
+                    ),
+                    Page::detail(Kind::PinLive, self.page.or("process"), Value::Null).path(
+                        &self.node,
+                        "",
+                        self.offset,
+                    ),
+                )
+            });
         let needs_catalog = matches!(
             self.page.kind,
             Kind::Process | Kind::Container | Kind::Unit | Kind::Accounts | Kind::Keys
@@ -136,7 +188,24 @@ impl Manager {
         let node = self.node.clone();
         self.run(Pending::Read, async move {
             let primary = core.api(Method::GET, &path, Value::Null);
-            if needs_catalog {
+            if let Some((registry_path, live_path)) = registry {
+                let saved = core.api(Method::GET, &registry_path, Value::Null).await?;
+                let live = if view::items(&saved, "resources").is_empty() {
+                    Value::Null
+                } else {
+                    core.api(Method::GET, &live_path, Value::Null)
+                        .await
+                        .unwrap_or_else(|error| json!({"error":error.to_string()}))
+                };
+                Ok(json!({"data":saved,"live":live}))
+            } else if overview {
+                let (nodes, alerts) = tokio::join!(
+                    primary,
+                    core.api(Method::GET, "/alerts?state=active&limit=5", Value::Null)
+                );
+                let alerts = alerts.unwrap_or_else(|error| json!({"error":error.to_string()}));
+                Ok(json!({"data":nodes?,"overview":alerts}))
+            } else if needs_catalog {
                 let catalog_path = format!("/nodes/{node}/operation-catalog");
                 let (data, catalog) =
                     tokio::join!(primary, core.api(Method::GET, &catalog_path, Value::Null));
@@ -168,14 +237,32 @@ impl Manager {
             self.back
                 .push((self.page.clone(), self.search.clone(), self.offset));
         }
+        self.offset = if page.kind == Kind::PinLive {
+            page.item["offset"].as_u64().unwrap_or(0) as usize
+        } else {
+            0
+        };
+        self.tag = string(&page.item, "tag");
         self.page = page;
         self.value = Value::Null;
         self.samples.clear();
         self.form = None;
         self.confirm = None;
-        self.offset = 0;
         self.search.clear();
         self.load(core)
+    }
+    fn reload_file(&mut self, core: Arc<Workspace>) -> Result<Task<Event>> {
+        let form = self.form.as_ref().context("编辑器已关闭")?;
+        ensure!(
+            self.page.kind == Kind::Entry && form.spec.kind == forms::FormKind::File,
+            "当前页面没有文件"
+        );
+        let path = self.page.path(&self.node, "", 0);
+        Ok(
+            self.run(Pending::ReloadFile(form.spec.mode.clone()), async move {
+                core.api(Method::GET, &path, Value::Null).await
+            }),
+        )
     }
     fn write(&mut self, work: Write, core: Arc<Workspace>) -> Task<Event> {
         let removed = work.method == Method::DELETE && work.path == format!("/nodes/{}", self.node);
@@ -209,10 +296,25 @@ impl Manager {
                     anyhow::Error::msg(e)
                 })?;
                 match std::mem::replace(&mut self.pending, Pending::Read) {
+                    Pending::ReloadFile(mode) => {
+                        ensure!(
+                            value["content"].is_string() && value["revision"].is_string(),
+                            "文件响应缺少内容或版本"
+                        );
+                        self.value = value.clone();
+                        self.form = Some(Form::new(Spec::new(forms::FormKind::File, value, &mode)));
+                    }
+                    Pending::Choices => self.choices_loaded(value),
                     Pending::Read => {
+                        self.overview = value["overview"].clone();
+                        self.live = value["live"].clone();
                         let mut data = value["data"].clone();
                         self.value = Value::Null;
-                        self.catalog = value["catalog"].clone();
+                        self.catalog = if value["catalog"]["enabled"] == true {
+                            value["catalog"].clone()
+                        } else {
+                            Value::Null
+                        };
                         if self.page.kind == Kind::Container {
                             let list = &data;
                             ensure!(
@@ -230,7 +332,8 @@ impl Manager {
                         }
                         if self.page.kind == Kind::Process && !self.page.item.is_null() {
                             ensure!(
-                                data["start_ticks"] == self.page.item["start_ticks"],
+                                data["start_ticks"] == self.page.item["start_ticks"]
+                                    && data["name"] == self.page.item["name"],
                                 "进程身份已改变，请重新选择"
                             );
                         }
@@ -322,6 +425,7 @@ impl Manager {
                 }
             }
             Event::Completed(..) => {}
+            Event::Repository(url) => crate::local_program::open_repository(&url)?,
             Event::CopyDraft if self.has_draft() => {
                 return Ok(iced::clipboard::write(
                     self.draft.as_ref().unwrap().2.editor.text(),
@@ -329,6 +433,12 @@ impl Manager {
             }
             Event::RestoreDraft if self.has_draft() => {
                 let (_, page, form) = self.draft.take().unwrap();
+                self.offset = if page.kind == Kind::PinLive {
+                    page.item["offset"].as_u64().unwrap_or(0) as usize
+                } else {
+                    0
+                };
+                self.tag = string(&page.item, "tag");
                 self.page = page;
                 self.form = Some(form);
                 self.error.clear();
@@ -348,6 +458,7 @@ impl Manager {
             }
             Event::Confirm if !self.busy => {
                 let c = self.confirm.as_mut().context("没有待确认操作")?;
+                ensure!(!c.expired(), "确认已过期，请重新准备操作");
                 if let Some(work) = c.work.take() {
                     self.confirm = None;
                     return Ok(self.write(work, core));
@@ -371,7 +482,21 @@ impl Manager {
                     core.api(Method::POST, &path, body).await
                 }));
             }
+            Event::CopyEditor => {
+                if let Some(f) = &self.form {
+                    return Ok(iced::clipboard::write(f.editor.text()));
+                }
+            }
+            Event::ReloadFile if !self.busy => {
+                if self.dirty() {
+                    self.reload_after_discard = true;
+                    self.discard = true;
+                } else {
+                    return self.reload_file(core);
+                }
+            }
             Event::Dismiss if !self.busy => {
+                self.reload_after_discard = false;
                 if self.confirm.take().is_none() {
                     if self.form.as_ref().is_some_and(|f| f.dirty) {
                         self.discard = true;
@@ -381,25 +506,41 @@ impl Manager {
                 }
                 self.error.clear();
             }
-            Event::Keep => self.discard = false,
-            Event::Discard => {
+            Event::Keep => {
+                self.discard = false;
+                self.reload_after_discard = false;
+            }
+            Event::Discard if !self.busy => {
+                if std::mem::take(&mut self.reload_after_discard) {
+                    self.discard = false;
+                    return self.reload_file(core);
+                }
                 self.form = None;
                 self.discard = false;
                 self.error.clear();
             }
-            Event::Edit(spec) => {
+            Event::Choose(e) => return self.choose(e, core),
+            Event::NodePage(id, name, page) => {
+                self.set_node(id, name);
+                return Ok(self.go(page, false, core));
+            }
+            Event::Tag(t) => self.tag = t,
+            Event::Edit(mut spec) => {
+                if matches!(spec.kind, forms::FormKind::Asset | forms::FormKind::Rule)
+                    && spec.data["node_id"].is_null()
+                {
+                    spec.data["node_id"] = json!(self.node);
+                    spec.data["node_name"] = json!(self.name);
+                }
                 self.form = Some(Form::new(spec));
                 self.error.clear();
             }
             Event::Field(i, v) => {
-                if let Some(f) = &mut self.form
-                    && let Some(field) = f.fields.get_mut(i)
-                {
-                    field.value = v;
-                    f.dirty = true;
+                if let Some(f) = &mut self.form {
+                    f.change(i, v);
                 }
             }
-            Event::Editor(action) => {
+            Event::Editor(action) if !self.busy => {
                 if let Some(f) = &mut self.form {
                     f.dirty |= action.is_edit();
                     f.editor.perform(action);
@@ -438,6 +579,7 @@ impl Manager {
             }
             Event::Back => {
                 if let Some((p, q, o)) = self.back.pop() {
+                    self.tag = string(&p.item, "tag");
                     self.page = p;
                     self.search = q;
                     self.offset = o;
@@ -446,13 +588,26 @@ impl Manager {
                 }
             }
             Event::Filter(k, v) => {
+                if k == "node_id" {
+                    self.page.item["node_name"] = Value::Null;
+                }
                 self.page.item[k] = json!(v);
                 self.offset = 0;
                 return Ok(self.load(core));
             }
-            Event::Search(v) => self.search = v,
+            Event::Search(v) => {
+                self.search = v;
+                if self.page.kind == Kind::Accounts {
+                    self.offset = 0;
+                }
+            }
             Event::Offset(o) => {
                 self.offset = o;
+                if self.local_rows().is_some()
+                    && !matches!(self.page.kind, Kind::Docker | Kind::Units)
+                {
+                    return Ok(Task::none());
+                }
                 return Ok(self.load(core));
             }
             Event::Refresh => return Ok(self.load(core)),
