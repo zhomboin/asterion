@@ -131,7 +131,9 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let store = Store::open();
+        Self::with_store(Store::open())
+    }
+    fn with_store(store: anyhow::Result<Store>) -> Self {
         let mut notice = String::new();
         let store = store.map_err(|e| notice = format!("{e:#}")).ok();
         let nodes = store

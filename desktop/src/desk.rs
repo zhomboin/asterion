@@ -449,6 +449,9 @@ impl App {
                         self.connection.rebind =
                             Some((self.desk.manager.node.clone(), format!("ssh://{node}")));
                         self.changed_destination();
+                        self.key_path.clear();
+                        self.connection.name.clear();
+                        self.method = crate::Method::Password;
                     }
                 }
                 // 管理工作区已登记的连接继续采样，新的连接有独立的身份和请求代次。
@@ -520,9 +523,7 @@ impl App {
                 self.epoch += 1;
                 self.sampling = false;
                 self.session = Some(session);
-                self.host = node.host.clone();
-                self.user = node.user.clone();
-                self.port = node.port.to_string();
+                let _ = self.handle(Message::Select(node.clone()))?;
                 let store = self.store.as_ref().context("本地数据不可用")?;
                 let id = store.connected(&node)?;
                 self.history = store.history(id)?;

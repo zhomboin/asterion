@@ -127,7 +127,7 @@ impl App {
             }
         })
     }
-    pub(super) fn remember_choice(&self, n: &Node) -> Result<()> {
+    pub(super) fn remember_choice(&mut self, n: &Node) -> Result<()> {
         let store = self.store.as_ref().context("本机数据不可用")?;
         if self.method == Method::Password
             && self.connection.remember
@@ -148,6 +148,36 @@ impl App {
             (self.method == Method::Password && self.connection.remember)
                 .then_some(self.secret.as_str()),
         )?;
-        store.set_auto(n, self.connection.auto)
+        store.set_auto(n, self.connection.auto)?;
+        self.connection.saved = Some(n.clone());
+        Ok(())
+    }
+}
+
+#[cfg(all(windows, test))]
+mod tests {
+    use super::*;
+    use crate::store::Store;
+    #[test]
+    fn saved_password_is_available_for_immediate_reconnect_only_to_its_target() -> Result<()> {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.local");
+        std::fs::create_dir_all(&base)?;
+        let private = tempfile::tempdir_in(base)?;
+        let mut app = App::with_store(Store::open_in(private.path()));
+        let n = Node::parse("test.invalid", "22", "member")?;
+        let other = Node::parse("other.invalid", "22", "member")?;
+        let secret = format!("{:032x}", rand::random::<u128>());
+        app.secret = zeroize::Zeroizing::new(secret.clone());
+        app.connection.remember = true;
+        app.remember_choice(&n)?;
+        app.secret = Default::default();
+        let Credentials::Password(reused) = app.credentials(&n)? else {
+            anyhow::bail!("缺少已保存的登录方式")
+        };
+        assert_eq!(reused.as_str(), secret);
+        assert!(app.credentials(&other).is_err());
+        app.changed_destination();
+        assert!(app.credentials(&n).is_err());
+        Ok(())
     }
 }
