@@ -5,8 +5,34 @@ use iced::{
 };
 use serde_json::Value;
 
+pub fn failure(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "ssh_target_changed" => "文件或实例已变化，请复制要保留的修改并重新读取。",
+        "ssh_permission_denied" => "请检查 SSH 账号对文件、所在目录及备份目录的权限。",
+        "ssh_file_hardlink" => "目标有多个硬链接，无法原子保存。",
+        "ssh_nginx_unavailable" => "无法核对 Nginx 实例或配置，请刷新配置清单并检查读取权限。",
+        _ => return None,
+    })
+}
+pub fn metric(k: &str) -> &str {
+    match k {
+        "offline" => "节点离线",
+        "cpu" => "CPU 利用率",
+        "memory" => "内存利用率",
+        "disk" => "文件系统利用率",
+        "service" => "服务停机",
+        s => s,
+    }
+}
 pub fn label(k: &str) -> &str {
     match k {
+        "wsl_distro" => "WSL 发行版",
+        "gid" => "主组 GID",
+        "bound_at" => "关联时间",
+        "resource_id" => "实例标识",
+        "pending" => "待同步",
+        "missed" => "未能补回",
+        "cancel_requested_at" => "请求取消时间",
         "name" => "名称",
         "id" => "标识",
         "node_name" => "节点",
@@ -195,6 +221,11 @@ pub fn value(v: &Value) -> String {
     }
 }
 pub fn display(k: &str, v: &Value) -> String {
+    if k == "metric"
+        && let Some(s) = v.as_str()
+    {
+        return metric(s).into();
+    }
     if k.ends_with("_at")
         && let Some(t) = v.as_i64()
         && let Some(t) = chrono::DateTime::from_timestamp(t, 0)

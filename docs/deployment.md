@@ -1,6 +1,6 @@
 # 部署、更新、备份与恢复
 
-Windows 客户端的便携包、节点采集器部署、工作区备份及更新见[桌面部署](windows-desktop.md#部署和使用)。以下步骤适用于 Linux 面板。
+Windows 客户端的便携包、节点采集器部署、工作区备份及更新见[桌面部署](windows-desktop.md#部署和使用)。两端的连接方式、后台运行条件及可用操作见[功能对照](desktop-parity.md)。以下步骤适用于 Linux 面板。
 
 Asterion 在自己的 Linux 或 WSL 电脑上运行，远端服务器通过 SSH 接入。需要断线采集时，打开节点的「监控部署」，从面板安装 systemd 服务。[部署与验收步骤](collector.md)首次下载、解压、启动和添加节点，按[本机使用](local.md)操作。
 

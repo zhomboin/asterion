@@ -117,11 +117,12 @@ impl Page {
         match self.kind {
             Nodes => format!("/nodes?metrics=true&{page}&q={q}{}", filter("status")),
             Node => base,
-            Metrics => format!("{base}/metrics?range={}&limit=240", self.or("1h")),
+            Metrics => format!("{base}/metrics?range={}", self.or("1h")),
             Trends => format!("{base}/trends?range={}", self.or("7d")),
             Processes => format!("{base}/processes?q={q}&sort=pid&limit=25&offset={offset}"),
             Process => format!("{base}/processes/{key}"),
-            Docker | Container => format!("{base}/docker?q={q}"),
+            Docker => format!("{base}/docker/containers?q={q}"),
+            Container => format!("{base}/docker/containers?q={key}"),
             Stats | Logs => format!(
                 "{base}/docker/containers/{key}/{}",
                 if self.kind == Stats {
@@ -151,7 +152,8 @@ impl Page {
                 self.item["node"].as_str().unwrap_or(node)
             ),
             Alerts => format!(
-                "/alerts?{page}{}",
+                "/alerts?{page}{}{}",
+                filter("node_id"),
                 if self.key.is_empty() {
                     String::new()
                 } else {

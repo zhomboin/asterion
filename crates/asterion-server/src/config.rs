@@ -40,6 +40,30 @@ impl Config {
         }
 
         ensure!(listen_addr.ip().is_loopback(), "本机面板只能监听回环地址");
+        let monitoring = MonitoringConfig::from_env()?;
+        Ok(Self {
+            terminal_enabled: monitoring.terminal_enabled,
+            listen_addr,
+            database_url,
+            web_dir,
+            admin_username: env_value("ASTERION_ADMIN_USERNAME")?,
+            admin_password_file: env_path("ASTERION_ADMIN_PASSWORD_FILE"),
+            sample_interval_secs: monitoring.interval,
+            retention_seconds: (monitoring.raw_days * 86400) as i64,
+            trend_retention_seconds: (monitoring.trend_days * 86400) as i64,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct MonitoringConfig {
+    pub terminal_enabled: bool,
+    pub interval: u64,
+    pub raw_days: u64,
+    pub trend_days: u64,
+}
+impl MonitoringConfig {
+    pub fn from_env() -> Result<Self> {
         let terminal_enabled = match env_value("ASTERION_TERMINAL_ENABLED")?.as_deref() {
             None | Some("1") => true,
             Some("0") => false,
@@ -48,25 +72,17 @@ impl Config {
 
         Ok(Self {
             terminal_enabled,
-            listen_addr,
-            database_url,
-            web_dir,
-            admin_username: env_value("ASTERION_ADMIN_USERNAME")?,
-            admin_password_file: env_path("ASTERION_ADMIN_PASSWORD_FILE"),
-            sample_interval_secs: bounded_env(
+            interval: bounded_env(
                 "ASTERION_SAMPLE_INTERVAL_SECS",
                 15,
                 5,
                 asterion_protocol::MAX_SAMPLE_INTERVAL_SECS,
             )?,
-            retention_seconds: (bounded_env("ASTERION_METRIC_RETENTION_DAYS", 7, 1, 365)? * 86_400)
-                as i64,
-            trend_retention_seconds: (bounded_env("ASTERION_TREND_RETENTION_DAYS", 90, 30, 365)?
-                * 86_400) as i64,
+            raw_days: bounded_env("ASTERION_METRIC_RETENTION_DAYS", 7, 1, 365)?,
+            trend_days: bounded_env("ASTERION_TREND_RETENTION_DAYS", 90, 30, 365)?,
         })
     }
 }
-
 fn env_path(name: &str) -> Option<PathBuf> {
     env::var_os(name)
         .filter(|value| !value.is_empty())

@@ -1,21 +1,28 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod chart;
+mod connect;
+mod connection_settings;
 mod desk;
+mod host_trust;
+mod jump;
 mod keys;
+mod local_program;
 mod management;
 mod model;
 mod screen;
 mod ssh;
+mod ssh_config;
 mod store;
 mod terminal;
 mod ui;
+mod vault;
 mod workspace;
 
 use iced::{Font, Size, Subscription, Task, Theme, widget::operation};
 use model::{Node, Sample};
-use ssh::{Credentials, Session};
-use std::{path::PathBuf, time::Duration};
+use ssh::Session;
+use std::{sync::Arc, time::Duration};
 use store::Store;
 use terminal::{Event, Input};
 use tokio::sync::mpsc;
@@ -38,6 +45,7 @@ fn main() -> iced::Result {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Method {
+    Config,
     Password,
     Key,
 }
@@ -58,6 +66,13 @@ enum Message {
     Select(Node),
     Connect,
     Trust,
+    VerifyHost,
+    ConfigName(String),
+    Remember(bool),
+    Auto(bool),
+    ForgetSecret,
+    Resolved(u64, Result<Arc<ssh_config::Config>, String>),
+    Probed(u64, Result<String, String>),
     Cancel,
     Login(u64, Result<ssh::Login, String>),
     Tick,
@@ -68,6 +83,7 @@ enum Message {
     Text(String),
     Key(Vec<u8>),
     Geometry(u16, u16),
+    Scroll(i32),
     Copy,
     Paste,
     Clipboard(u64, Option<String>),
@@ -82,6 +98,8 @@ impl std::fmt::Debug for Message {
 
 struct App {
     desk: desk::Desk,
+    terminal_allowed: bool,
+    connection: connect::Options,
     closing: Option<iced::window::Id>,
     store: Option<Store>,
     nodes: Vec<Node>,
@@ -113,7 +131,9 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let store = Store::open();
+        Self::with_store(Store::open())
+    }
+    fn with_store(store: anyhow::Result<Store>) -> Self {
         let mut notice = String::new();
         let store = store.map_err(|e| notice = format!("{e:#}")).ok();
         let nodes = store
@@ -126,8 +146,11 @@ impl App {
             })
             .unwrap_or_default();
         let first = nodes.first();
-        Self {
+        let mut app = Self {
+            connection: Default::default(),
             desk: Default::default(),
+            terminal_allowed: asterion_server::config::MonitoringConfig::from_env()
+                .is_ok_and(|c| c.terminal_enabled),
             closing: None,
             host: first.map(|n| n.host.clone()).unwrap_or_default(),
             port: first
@@ -157,7 +180,13 @@ impl App {
             geometry: (80, 12),
             term_status: String::new(),
             paste: None,
+        };
+        if let Some(first) = app.nodes.first().cloned()
+            && let Err(e) = app.restore_choice(&first)
+        {
+            app.notice = e.to_string();
         }
+        app
     }
 
     fn node(&self) -> anyhow::Result<Node> {
@@ -165,21 +194,16 @@ impl App {
     }
     fn connect(&mut self) -> anyhow::Result<Task<Message>> {
         let node = self.node()?;
+        anyhow::ensure!(
+            !self.desk.restoring.contains_key(&node.to_string()),
+            "正在恢复此节点的 SSH 连接"
+        );
         let expected = self
             .store
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("本机数据不可用"))?
             .fingerprint(&node)?;
-        let auth = match self.method {
-            Method::Password => {
-                anyhow::ensure!(!self.secret.is_empty(), "请输入 SSH 密码");
-                Credentials::Password(self.secret.clone())
-            }
-            Method::Key => {
-                anyhow::ensure!(!self.key_path.trim().is_empty(), "请输入私钥文件路径");
-                Credentials::Key(PathBuf::from(self.key_path.trim()), self.secret.clone())
-            }
-        };
+        let auth = self.credentials(&node)?;
         self.busy = true;
         self.notice.clear();
         self.epoch += 1;
@@ -187,6 +211,21 @@ impl App {
         Ok(Task::perform(ssh::login(node, expected, auth), move |r| {
             Message::Login(epoch, r.map_err(|e| format!("{e:#}")))
         }))
+    }
+
+    fn connected(&mut self, node: &Node, session: ssh::Session) -> anyhow::Result<()> {
+        let remembered = self.remember_choice(node);
+        self.secret.zeroize();
+        remembered?;
+        let db = self.store.as_ref().unwrap();
+        let id = db.connected(node)?;
+        self.history = db.history(id)?;
+        self.nodes = db.nodes()?;
+        self.session = Some(session);
+        self.node_id = Some(id);
+        self.notice.clear();
+        self.term_status.clear();
+        Ok(())
     }
 
     fn poll(&mut self) -> Task<Message> {
@@ -246,40 +285,98 @@ impl App {
                     return Ok(iced::window::close(id));
                 }
             }
-            Message::Host(v) => self.host = v,
-            Message::Port(v) => self.port = v,
-            Message::User(v) => self.user = v,
+            Message::Host(v) => {
+                self.changed_destination();
+                self.host = v;
+            }
+            Message::Port(v) => {
+                self.changed_destination();
+                self.port = v;
+            }
+            Message::User(v) => {
+                self.changed_destination();
+                self.user = v;
+            }
             Message::Secret(v) => self.secret = Zeroizing::new(v),
             Message::KeyPath(v) => self.key_path = v,
             Message::Method(m) => {
+                self.changed_destination();
                 self.method = m;
+                if m == Method::Config {
+                    self.connection.profiles = ssh_config::names()?;
+                }
                 self.secret.zeroize();
             }
             Message::Select(n) => {
+                self.key_path.clear();
+                self.restore_choice(&n)?;
                 self.host = n.host;
                 self.port = n.port.to_string();
                 self.user = n.user;
                 self.secret.zeroize();
-                self.key_path.clear();
                 self.notice.clear();
             }
             Message::Connect if !self.busy && self.session.is_none() && self.verify.is_none() => {
-                return self.connect();
+                return self.begin(connect::Intent::Login);
+            }
+            Message::VerifyHost if !self.busy && self.session.is_none() => {
+                return self.begin(connect::Intent::Verify);
+            }
+            Message::ConfigName(name) => {
+                self.changed_destination();
+                self.connection.name = name;
+            }
+            Message::Remember(v) => {
+                self.connection.remember = v;
+                if !v {
+                    self.connection.auto = false;
+                }
+            }
+            Message::Auto(v) => self.connection.auto = v,
+            Message::ForgetSecret => {
+                let n = self.node()?;
+                self.store.as_ref().unwrap().forget_login(&n)?;
+                self.changed_destination();
+                self.notice = "已清除保存的登录信息".into();
+            }
+            Message::Resolved(e, r) if self.epoch == e => {
+                self.busy = false;
+                return self.accept_profile(r.map_err(anyhow::Error::msg)?);
+            }
+            Message::Probed(e, r) if self.epoch == e => {
+                self.busy = false;
+                let key = r.map_err(anyhow::Error::msg)?;
+                match self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("本机数据不可用"))?
+                    .fingerprint(&self.node()?)?
+                {
+                    Some(old) if old == key => self.notice = format!("已核对主机指纹 · {key}"),
+                    Some(_) => anyhow::bail!("服务器指纹与已信任记录不符"),
+                    None => self.verify = Some(key),
+                }
             }
             Message::Trust => {
                 if let Some(key) = self.verify.take() {
                     self.store.as_ref().unwrap().trust(&self.node()?, &key)?;
+                    if self.connection.verify_only {
+                        return self.perform_connection();
+                    }
                     return self.connect();
                 }
             }
-            Message::Cancel => {
+            Message::Cancel if !self.connection.committing => {
                 self.close_term();
-                if let Ok(node) = self.node() {
-                    self.desk.active.remove(&workspace::Workspace::id(&node));
+                if self.session.is_some()
+                    && let Ok(node) = self.node()
+                {
+                    self.desk.active.retain(|_, c| c.node != node);
                 }
                 let session = self.session.take();
                 self.epoch += 1;
                 self.verify = None;
+                self.connection.rebind = None;
                 self.busy = false;
                 self.secret.zeroize();
                 self.node_id = None;
@@ -303,16 +400,11 @@ impl App {
                 match r {
                     Ok(ssh::Login::Verify(key)) => self.verify = Some(key),
                     Ok(ssh::Login::Connected(session)) => {
-                        self.secret.zeroize();
                         let node = self.node()?;
-                        let db = self.store.as_ref().unwrap();
-                        let id = db.connected(&node)?;
-                        self.history = db.history(id)?;
-                        self.nodes = db.nodes()?;
-                        self.session = Some(session);
-                        self.node_id = Some(id);
-                        self.notice.clear();
-                        self.term_status.clear();
+                        if self.connection.rebind.is_some() {
+                            return self.finish_rebind(node, session);
+                        }
+                        self.connected(&node, session)?;
                         return Ok(Task::batch([self.poll(), self.attach_workspace()?]));
                     }
                     Err(e) => {
@@ -320,6 +412,9 @@ impl App {
                         self.notice = e
                     }
                 }
+            }
+            Message::Tick if self.desk.expired() => {
+                return self.desktop(desk::Action::Manage(management::Event::Lock));
             }
             Message::Tick => {
                 let refresh = self.refresh_management();
@@ -339,13 +434,14 @@ impl App {
                 }
             }
             Message::Open if self.input.is_none() => {
+                anyhow::ensure!(self.terminal_allowed, "本机已停用交互终端");
                 if let Some(session) = self.session.clone() {
                     self.term_epoch += 1;
                     let epoch = self.term_epoch;
                     let (tx, rx) = mpsc::channel(64);
                     self.input = Some(tx);
                     let (c, r) = self.geometry;
-                    self.parser = vt100::Parser::new(r, c, 0);
+                    self.parser = vt100::Parser::new(r, c, 400);
                     self.screen_cache.clear();
                     self.ready = false;
                     self.term_status = "正在打开终端…".into();
@@ -374,6 +470,13 @@ impl App {
                     self.term_status = reason;
                 }
             },
+            Message::Scroll(rows) => {
+                let current = self.parser.screen().scrollback();
+                self.parser
+                    .screen_mut()
+                    .set_scrollback(current.saturating_add_signed(rows as isize));
+                self.screen_cache.clear();
+            }
             Message::Geometry(c, r) => {
                 self.geometry = (c, r);
                 self.parser.screen_mut().set_size(r, c);
@@ -419,7 +522,7 @@ impl App {
 
     fn subscription(&self) -> Subscription<Message> {
         let closing = iced::window::close_requests().map(Message::CloseWindow);
-        if self.session.is_none() && !self.desk.visible {
+        if self.session.is_none() && !self.desk.unlocked() && !self.desk.visible {
             return closing;
         }
         Subscription::batch([

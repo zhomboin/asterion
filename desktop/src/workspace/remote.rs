@@ -10,7 +10,7 @@ use tokio::{fs::File, io::AsyncReadExt, sync::watch};
 #[derive(Clone)]
 pub struct Remote {
     pub session: Session,
-    policy: Arc<Value>,
+    policy: Arc<super::policy::Policy>,
     renewed: Arc<Renewed>,
 }
 
@@ -66,30 +66,17 @@ impl Remote {
             .clone()
             .unwrap_or_else(|| self.session.clone())
     }
+    pub async fn reconnect(&self) -> Result<()> {
+        let session = self.session.reconnect().await?;
+        self.renewed.replace(Some(session));
+        Ok(())
+    }
     pub async fn new(session: Session, directory: &Path, address: &str) -> Result<Self> {
-        let policy = match tokio::fs::File::open(directory.join("policies.json")).await {
-            Ok(file) => {
-                let mut bytes = Vec::new();
-                file.take(4 * 1024 * 1024 + 1)
-                    .read_to_end(&mut bytes)
-                    .await?;
-                ensure!(bytes.len() <= 4 * 1024 * 1024, "节点策略文件过大");
-                let entries: Value =
-                    serde_json::from_slice(&bytes).context("节点策略文件格式错误")?;
-                ensure!(entries.is_object(), "节点策略必须按 SSH 地址登记");
-                if let Some(entry) = entries.get(address) {
-                    ensure!(entry["policy"].is_object(), "所选节点的策略格式错误");
-                    entry["policy"].clone()
-                } else {
-                    Value::Null
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
-            Err(e) => return Err(e.into()),
-        };
+        let policy = Arc::new(super::policy::Policy::new(directory, address, &session));
+        policy.read().await?;
         Ok(Self {
             session,
-            policy: Arc::new(policy),
+            policy,
             renewed: Arc::new(Renewed::new()),
         })
     }
@@ -101,7 +88,17 @@ impl Remote {
         seconds: u64,
         progress: Option<&watch::Sender<Option<TaskProgress>>>,
     ) -> TaskReply {
-        let (command, bytes) = match wire::request(kind, args, seconds, &self.policy, true) {
+        let policy = match self.policy.read().await {
+            Ok(value) => value,
+            Err(e) => return TaskReply::failure("unavailable", &format!("无法读取节点策略：{e}")),
+        };
+        let (command, bytes) = match wire::request(
+            kind,
+            args,
+            seconds,
+            &policy,
+            self.session.config().is_none_or(|c| !c.named),
+        ) {
             Ok(parts) => parts,
             Err(reply) => return reply,
         };

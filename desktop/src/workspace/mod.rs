@@ -1,4 +1,7 @@
+mod bindings;
+mod policy;
 pub mod remote;
+pub mod resume;
 mod worker;
 
 use crate::{model::Node, ssh::Session, store::Store};
@@ -34,7 +37,9 @@ pub struct Workspace {
     pool: SqlitePool,
     directory: PathBuf,
     _maintenance: Running,
+    config: asterion_server::config::MonitoringConfig,
     _lock: File,
+    pub expires_at: i64,
 }
 
 impl Workspace {
@@ -57,7 +62,12 @@ impl Workspace {
         lock.try_lock().context("工作区已在其他窗口打开")?;
         let pool = database::connect_path(&directory.join("workspace.sqlite3")).await?;
         auth::bootstrap_desktop_admin(&pool, password.to_string()).await?;
-        let bus = Arc::new(SshBus::new(15).with_terminal_enabled(true));
+        let config = asterion_server::config::MonitoringConfig::from_env()?;
+        let bus = Arc::new(
+            SshBus::new(config.interval)
+                .with_terminal_enabled(config.terminal_enabled)
+                .with_retention_days(config.raw_days, config.trend_days),
+        );
         let (_, stop) = watch::channel(false);
         let router = local::in_process(app::router(pool.clone(), None, stop, bus.clone()));
         let response = request(
@@ -74,35 +84,31 @@ impl Workspace {
             .context("工作区口令错误")?
             .to_str()?
             .to_owned();
+        let expires_at = sqlx::query_scalar::<_, i64>(
+            "SELECT expires_at FROM panel_sessions WHERE token_hash=?",
+        )
+        .bind(Sha256::digest(token.as_bytes()).to_vec())
+        .fetch_one(&pool)
+        .await?;
         operations::recover(&pool).await?;
-        // 仅在首次打开管理库时导入快捷连接，后续移除节点不会被自动恢复。
-        sqlx::query("CREATE TABLE IF NOT EXISTS desktop_import (version INTEGER PRIMARY KEY)")
-            .execute(&pool)
-            .await?;
-        let mut tx = pool.begin().await?;
-        if sqlx::query("INSERT OR IGNORE INTO desktop_import VALUES(1)")
-            .execute(&mut *tx)
-            .await?
-            .rows_affected()
-            == 1
-        {
-            for node in nodes {
-                sqlx::query(
-                    "INSERT OR IGNORE INTO nodes(id,name,kind,ssh_profile) VALUES(?,?,'linux',?)",
-                )
-                .bind(Self::id(&node))
-                .bind(node.to_string())
-                .bind(format!("ssh://{node}"))
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-        tx.commit().await?;
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS desktop_removed(profile TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS desktop_rebindings(old TEXT PRIMARY KEY,new TEXT NOT NULL);
             CREATE TRIGGER IF NOT EXISTS desktop_remove AFTER DELETE ON nodes WHEN OLD.ssh_profile IS NOT NULL
             BEGIN INSERT OR IGNORE INTO desktop_removed VALUES(OLD.ssh_profile); END;").execute(&pool).await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+        for n in nodes {
+            let address = format!("ssh://{n}");
+            sqlx::query("INSERT INTO nodes(id,name,kind,ssh_profile)
+                SELECT CASE WHEN EXISTS(SELECT 1 FROM nodes WHERE id=?1) THEN lower(hex(randomblob(16))) ELSE ?1 END,?2,'linux',?3
+                WHERE NOT EXISTS(SELECT 1 FROM nodes WHERE ssh_profile=?3)
+                AND NOT EXISTS(SELECT 1 FROM desktop_removed WHERE profile=?3)
+                AND NOT EXISTS(SELECT 1 FROM desktop_rebindings WHERE old=?3)")
+                .bind(Self::id(&n)).bind(n.to_string()).bind(address).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        bindings::reconcile(&pool, &directory).await?;
         reconcile_removed(&pool, &directory).await?;
-        let maintenance = maintain(pool.clone(), bus.clone());
+        let maintenance = maintain(pool.clone(), bus.clone(), config);
         Ok(Arc::new(Self {
             router,
             token: Zeroizing::new(token),
@@ -110,7 +116,9 @@ impl Workspace {
             bus,
             directory,
             _maintenance: maintenance,
+            config,
             _lock: lock,
+            expires_at,
         }))
     }
 
@@ -149,20 +157,25 @@ impl Workspace {
         node: Node,
         session: Session,
     ) -> Result<(String, Arc<Running>, remote::Remote)> {
-        let id = Self::id(&node);
+        self.attach_as(node, session, None).await
+    }
+    pub async fn attach_as(
+        &self,
+        node: Node,
+        session: Session,
+        rebind: Option<(String, String)>,
+    ) -> Result<(String, Arc<Running>, remote::Remote)> {
+        self.api(Method::GET, "/me", Value::Null).await?;
         let address = format!("ssh://{node}");
         let remote = remote::Remote::new(session, &self.directory, &address).await?;
-        sqlx::query("INSERT INTO nodes(id,name,kind,ssh_profile) VALUES(?,?,'linux',?) ON CONFLICT(id) DO NOTHING")
-            .bind(&id).bind(node.to_string()).bind(&address).execute(&self.pool).await?;
-        let matching = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM nodes WHERE id=? AND ssh_profile=?)",
-        )
-        .bind(&id)
-        .bind(&address)
-        .fetch_one(&self.pool)
-        .await?;
-        ensure!(matching, "已保存节点的 SSH 身份发生变化");
-        let running = worker::start(self.pool.clone(), &self.bus, id.clone(), remote.clone());
+        let id = self.bind(&node, rebind).await?;
+        let running = worker::start(
+            self.pool.clone(),
+            &self.bus,
+            id.clone(),
+            remote.clone(),
+            self.config,
+        );
         Ok((id, Arc::new(running), remote))
     }
 }
@@ -207,16 +220,20 @@ async fn request(
     Ok(router.clone().oneshot(builder.body(body)?).await?)
 }
 
-fn maintain(pool: SqlitePool, bus: Arc<SshBus>) -> Running {
+fn maintain(
+    pool: SqlitePool,
+    bus: Arc<SshBus>,
+    config: asterion_server::config::MonitoringConfig,
+) -> Running {
     let task = tokio::spawn(async move {
         let mut iteration = 0u32;
         loop {
-            let _ = alerts::evaluate(&pool, 15).await;
+            let _ = alerts::evaluate(&pool, config.interval).await;
             let _ = service_monitors::poll_due(&pool, &bus).await;
             if iteration.is_multiple_of(240) {
-                let _ = monitor::purge_metrics(&pool, 7 * 86400).await;
-                let _ = trends::purge(&pool, 90 * 86400).await;
-                let _ = service_monitors::purge(&pool, 90 * 86400).await;
+                let _ = monitor::purge_metrics(&pool, (config.raw_days * 86400) as i64).await;
+                let _ = trends::purge(&pool, (config.trend_days * 86400) as i64).await;
+                let _ = service_monitors::purge(&pool, (config.trend_days * 86400) as i64).await;
             }
             iteration = iteration.wrapping_add(1);
             tokio::time::sleep(Duration::from_secs(15)).await;

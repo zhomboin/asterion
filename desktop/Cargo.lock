@@ -182,11 +182,13 @@ dependencies = [
  "russh",
  "serde_json",
  "sha2 0.10.9",
+ "shlex",
  "sqlx",
  "tempfile",
  "tokio",
  "tower",
  "vt100",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

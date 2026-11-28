@@ -55,14 +55,17 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
                 "process",
             ));
             for (sig, title) in [("term", "请求结束"), ("kill", "强制终止")] {
-                if cat["process"][sig] == true {
+                if v["pid"].as_u64().is_some_and(|p| p > 1)
+                    && v["start_ticks"].as_u64().is_some_and(|t| t > 0)
+                    && cat["process"][sig] == true
+                {
                     c=c.push(btn(title,Event::Prepare(json!({"type":"process","pid":v["pid"],"start_ticks":v["start_ticks"],"signal":sig}))));
                 }
             }
         }
         Docker => {
             c = c.push(facts::facts(v, &["status", "engine_version", "truncated"]));
-            for r in items(v, "containers") {
+            for r in m.visible_rows() {
                 c = c.push(
                     row![
                         link(
@@ -103,6 +106,7 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
         Logs => {
             c = c.push(
                 row![
+                    link("25 行", Logs, &p.key, json!({"lines":25})),
                     link("50 行", Logs, &p.key, json!({"lines":50})),
                     link("100 行", Logs, &p.key, json!({"lines":100})),
                     link("200 行", Logs, &p.key, json!({"lines":200}))
@@ -116,7 +120,7 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
         }
         Units => {
             c = c.push(facts::facts(v, &["status", "truncated"]));
-            for r in items(v, "units") {
+            for r in m.visible_rows() {
                 c = c.push(
                     row![
                         link(&string(r, "name"), Unit, string(r, "name"), Value::Null),
@@ -128,7 +132,8 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
         }
         Unit => {
             c = c.push(facts::all(v));
-            if v["verified"] == true {
+            c = c.push(link("状态记录", MonitorHistory, &p.key, Value::Null));
+            if v["verified"] == true && v["name"] == p.key {
                 c = c.push(mutation(
                     "启用持续监控",
                     Method::PUT,
@@ -148,7 +153,23 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
             }
         }
         Monitors => {
-            for r in items(v, "monitors") {
+            let show_all = p.item["disabled"] == "yes";
+            c = c.push(btn(
+                if show_all {
+                    "隐藏已停用"
+                } else {
+                    "显示已停用"
+                },
+                Event::Filter(
+                    "disabled",
+                    if show_all {
+                        String::new()
+                    } else {
+                        "yes".into()
+                    },
+                ),
+            ));
+            for r in m.visible_rows() {
                 let unit = string(r, "unit");
                 let enabled = r["enabled"] == true;
                 c = c
@@ -167,6 +188,7 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
                     ))
                     .push(
                         row![
+                            link("服务详情", Unit, &unit, Value::Null),
                             link("状态记录", MonitorHistory, &unit, Value::Null),
                             mutation(
                                 if enabled {
@@ -184,72 +206,24 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
                         .spacing(6),
                     );
             }
-            if items(v, "monitors").is_empty() {
+            if m.visible_rows().is_empty() {
                 c = c
                     .push(text("尚未添加服务监控"))
                     .push(link("选择服务", Units, "", Value::Null));
             }
         }
         MonitorHistory => {
-            for r in items(v, "history") {
+            c = c
+                .push(section(&p.key))
+                .push(link("服务详情", Unit, &p.key, Value::Null));
+            for r in m.visible_rows() {
                 c = c.push(facts::all(r)).push(rule::horizontal(1));
             }
             if items(v, "history").is_empty() {
                 c = c.push(text("暂无状态变更"));
             }
         }
-        Pins => {
-            c = c.push(
-                row![
-                    link("进程", Pins, "process", Value::Null),
-                    link("容器", Pins, "docker", Value::Null),
-                    link("查看实时状态", PinLive, p.or("process"), Value::Null)
-                ]
-                .spacing(6),
-            );
-            for r in items(v, "resources") {
-                c = c.push(
-                    row![
-                        text(string(r, "name")),
-                        mutation(
-                            "取消关注",
-                            Method::DELETE,
-                            format!("{base}/managed-resources/{}/{}", p.or("process"), r["id"]),
-                            Value::Null,
-                            format!("移除 {} 的关注？", string(r, "name")),
-                            p.clone()
-                        )
-                    ]
-                    .spacing(6),
-                );
-            }
-            if items(v, "resources").is_empty() {
-                c = c.push(text("尚未关注资源"));
-            }
-        }
-        PinLive => {
-            let rows = v
-                .as_array()
-                .map(Vec::as_slice)
-                .unwrap_or(items(v, "containers"));
-            for r in rows {
-                c = c.push(facts::facts(
-                    r,
-                    &[
-                        "name",
-                        "pid",
-                        "cpu_percent",
-                        "memory_bytes",
-                        "image",
-                        "state",
-                        "status",
-                    ],
-                ));
-            }
-            if rows.is_empty() {
-                c = c.push(text("当前没有匹配的实时资源"));
-            }
-        }
+        Pins | PinLive => return super::registry::panel(m),
         Accounts => {
             let allowed = items(&cat["accounts"], "usernames")
                 .iter()
@@ -257,7 +231,7 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
                     **name != "root" && !items(v, "users").iter().any(|u| u["username"] == **name)
                 })
                 .collect::<Vec<_>>();
-            if !allowed.is_empty() {
+            if cat["accounts"]["enabled"] == true && !allowed.is_empty() {
                 c = c.push(edit(
                     "创建普通账号",
                     FormKind::Account,
@@ -270,27 +244,28 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
                     .on_input(Event::Search)
                     .padding(6),
             );
-            for u in items(v, "users").iter().filter(|u| {
-                string(u, "username")
-                    .to_lowercase()
-                    .contains(&m.search.to_lowercase())
-                    || string(u, "uid") == m.search
-            }) {
+            if v["truncated"] == true {
+                c = c.push(text("账号清单已截断"));
+            }
+            if m.visible_rows().is_empty() {
+                c = c.push(text("没有匹配的账号"));
+            }
+            for u in m.visible_rows() {
                 c = c
                     .push(text(format!(
                         "{}  ·  UID {}",
                         string(u, "username"),
                         u["uid"]
                     )))
-                    .push(facts::facts(u, &["groups", "home", "shell"]));
-                if cat["accounts"]["enabled"] == true
-                    && items(&cat["accounts"], "usernames").contains(&u["username"])
-                    && u["uid"] != 0
-                    && u["system"] != true
-                {
+                    .push(facts::facts(
+                        u,
+                        &["gid", "system", "groups", "home", "shell"],
+                    ));
+                c = c.push(link("公钥指纹", Keys, string(u, "username"), u.clone()));
+                if account_editable(cat, u) && !items(&cat["accounts"], "groups").is_empty() {
                     c = c.push(
                         row![
-                            link("公钥", Keys, string(u, "username"), u.clone()),
+
                             edit("变更附加组", FormKind::Account, &json!({"username":u["username"],"groups":u["groups"],"allowed":cat["accounts"]["groups"]}), "set_groups")
                         ]
                         .spacing(6),
@@ -299,14 +274,22 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
             }
         }
         Keys => {
-            c = c.push(section(&p.key)).push(edit(
-                "添加公钥",
-                FormKind::Account,
-                &p.item,
-                "add_key",
-            ));
+            c = c.push(section(&p.key));
+            let editable = account_editable(cat, &p.item);
+            if editable {
+                c = c.push(edit("添加公钥", FormKind::Account, &p.item, "add_key"));
+            }
+            if v["truncated"] == true {
+                c = c.push(text("公钥清单已截断"));
+            }
+            if items(v, "keys").is_empty() {
+                c = c.push(text("没有已授权公钥"));
+            }
             for key in items(v, "keys") {
-                c=c.push(facts::all(key)).push(btn("移除此公钥",Event::Prepare(json!({"type":"account","change":{"type":"remove_key","username":p.key,"fingerprint":key["fingerprint"]}}))));
+                c = c.push(facts::all(key));
+                if editable {
+                    c=c.push(btn("移除此公钥",Event::Prepare(json!({"type":"account","change":{"type":"remove_key","username":p.key,"fingerprint":key["fingerprint"]}}))));
+                }
             }
         }
         Catalog => {
@@ -351,6 +334,7 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
                 v,
                 &[
                     "name",
+                    "command",
                     "package",
                     "installed",
                     "path",
@@ -398,7 +382,7 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
                     for (verb, title) in verbs() {
                         c = c.push(btn(title, Event::Prepare(managed(v, verb))));
                     }
-                    if v["terminal"] == true && v["running"] == true {
+                    if m.terminal_enabled && v["terminal"] == true && v["running"] == true {
                         c = c.push(btn(
                             "打开容器终端",
                             Event::ContainerTerminal(
@@ -412,12 +396,25 @@ pub fn panel(m: &Manager) -> Element<'_, Event> {
         Collector => {
             c = c.push(facts::all(v));
             if v["artifact_available"] == true && v["state"] != "unsupported" {
-                c = c.push(edit("安装、更新或调整采集器", FormKind::Collector, v, ""));
+                c = c
+                    .push(btn(
+                        "沿用配置部署",
+                        Event::Prepare(json!({"type":"collector_deploy","revision":v["revision"]})),
+                    ))
+                    .push(edit("自定义参数部署", FormKind::Collector, v, ""));
             }
         }
         _ => {}
     }
     c.into()
+}
+pub(super) fn account_editable(cat: &Value, user: &Value) -> bool {
+    cat["enabled"] == true
+        && cat["accounts"]["enabled"] == true
+        && user["system"] == false
+        && user["uid"].as_u64().is_some_and(|id| id > 0)
+        && user["username"] != "root"
+        && items(&cat["accounts"], "usernames").contains(&user["username"])
 }
 fn verbs() -> [(&'static str, &'static str); 3] {
     [("start", "启动"), ("stop", "停止"), ("restart", "重启")]

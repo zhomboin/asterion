@@ -84,6 +84,11 @@ fn connect(app: &App) -> Element<'_, Message> {
     let mut form = column![heading("连接 Linux 节点")]
         .spacing(12)
         .max_width(640);
+    if let Some((_, old)) = &app.connection.rebind {
+        form = form.push(text(format!(
+            "更改 {old} 的连接地址，保留此节点的历史、资产与告警。"
+        )));
+    }
     if let Some(fp) = &app.verify {
         form = form
             .push(text(app.node().map(|n| n.to_string()).unwrap_or_default()))
@@ -91,13 +96,20 @@ fn connect(app: &App) -> Element<'_, Message> {
             .push(text(fp).size(16))
             .push(
                 row![
-                    button("信任并连接").on_press(Message::Trust),
+                    button(if app.connection.verify_only {
+                        "信任并核对"
+                    } else {
+                        "信任并连接"
+                    })
+                    .on_press(Message::Trust),
                     button("取消")
                         .on_press(Message::Cancel)
                         .style(button::secondary)
                 ]
                 .spacing(10),
             );
+    } else if app.connection.committing {
+        form = form.push(text("正在保存连接地址…"));
     } else if app.busy {
         form = form
             .push(text("正在连接…"))
@@ -114,36 +126,38 @@ fn connect(app: &App) -> Element<'_, Message> {
                 .width(Length::Fill),
             );
         }
-        form = form.push(
-            row![
+        if app.method != Method::Config {
+            form = form.push(
+                row![
+                    column![
+                        label("主机地址"),
+                        text_input("域名或 IP", &app.host)
+                            .on_input(Message::Host)
+                            .padding(9)
+                    ]
+                    .spacing(4)
+                    .width(Length::Fill),
+                    column![
+                        label("端口"),
+                        text_input("端口", &app.port)
+                            .on_input(Message::Port)
+                            .padding(9)
+                    ]
+                    .spacing(4)
+                    .width(96)
+                ]
+                .spacing(12),
+            );
+            form = form.push(
                 column![
-                    label("主机地址"),
-                    text_input("域名或 IP", &app.host)
-                        .on_input(Message::Host)
+                    label("SSH 用户名"),
+                    text_input("用户名", &app.user)
+                        .on_input(Message::User)
                         .padding(9)
                 ]
-                .spacing(4)
-                .width(Length::Fill),
-                column![
-                    label("端口"),
-                    text_input("端口", &app.port)
-                        .on_input(Message::Port)
-                        .padding(9)
-                ]
-                .spacing(4)
-                .width(96)
-            ]
-            .spacing(12),
-        );
-        form = form.push(
-            column![
-                label("SSH 用户名"),
-                text_input("用户名", &app.user)
-                    .on_input(Message::User)
-                    .padding(9)
-            ]
-            .spacing(4),
-        );
+                .spacing(4),
+            );
+        }
         let method_button = |title, method| {
             button(text(title))
                 .style(if app.method == method {
@@ -156,7 +170,8 @@ fn connect(app: &App) -> Element<'_, Message> {
         form = form.push(label("认证方式")).push(
             row![
                 method_button("密码", Method::Password),
-                method_button("私钥", Method::Key)
+                method_button("私钥", Method::Key),
+                method_button("本机 SSH 配置", Method::Config)
             ]
             .spacing(6),
         );
@@ -171,13 +186,35 @@ fn connect(app: &App) -> Element<'_, Message> {
                 .spacing(4),
             );
         }
+        if app.method == Method::Config {
+            form = form.push(label("OpenSSH 别名或命名连接")).push(
+                text_input("连接名称", &app.connection.name)
+                    .on_input(Message::ConfigName)
+                    .on_submit(Message::Connect)
+                    .padding(9),
+            );
+            if !app.connection.profiles.is_empty() {
+                form = form.push(
+                    pick_list(
+                        app.connection.profiles.as_slice(),
+                        None::<String>,
+                        Message::ConfigName,
+                    )
+                    .placeholder("选择命名连接"),
+                );
+            }
+        }
         let prompt = if app.method == Method::Key {
             "私钥口令（可留空）"
         } else {
-            "SSH 密码"
+            if app.connection.saved.is_some() && app.connection.remember {
+                "SSH 密码（留空使用已保存的密码）"
+            } else {
+                "SSH 密码"
+            }
         };
-        form = form
-            .push(
+        if app.method != Method::Config {
+            form = form.push(
                 column![
                     label(prompt),
                     text_input(prompt, &app.secret)
@@ -187,12 +224,39 @@ fn connect(app: &App) -> Element<'_, Message> {
                         .padding(9)
                 ]
                 .spacing(4),
-            )
-            .push(
-                button("连接节点")
-                    .padding([8, 18])
-                    .on_press_maybe(app.store.is_some().then_some(Message::Connect)),
             );
+        }
+        if cfg!(windows) && app.method == Method::Password {
+            form = form.push(
+                iced::widget::checkbox(app.connection.remember)
+                    .label("为此节点保存密码（Windows 用户加密）")
+                    .on_toggle(Message::Remember),
+            );
+        }
+        if app.method != Method::Password || app.connection.remember {
+            form = form.push(
+                iced::widget::checkbox(app.connection.auto)
+                    .label("解锁工作区后自动连接")
+                    .on_toggle(Message::Auto),
+            );
+        }
+        if app.connection.saved.is_some() {
+            form = form.push(button("清除保存的登录信息").on_press(Message::ForgetSecret));
+        }
+        form = form.push(
+            row![
+                button("核对指纹")
+                    .on_press_maybe(app.store.is_some().then_some(Message::VerifyHost)),
+                button(if app.connection.rebind.is_some() {
+                    "验证并更改地址"
+                } else {
+                    "连接节点"
+                })
+                .padding([8, 18])
+                .on_press_maybe(app.store.is_some().then_some(Message::Connect))
+            ]
+            .spacing(8),
+        );
     }
     scrollable(container(form).padding([10, 16]))
         .height(Length::Fill)
@@ -245,7 +309,7 @@ fn detail(app: &App) -> Element<'_, Message> {
             text(trend).size(13).color(MUTED)
         ])
         .push(
-            canvas(Chart(&app.history, 15, 100.))
+            canvas(Chart(&app.history, 15, 100., None))
                 .width(Length::Fill)
                 .height(80),
         )
@@ -271,7 +335,8 @@ fn detail(app: &App) -> Element<'_, Message> {
             )
             .push(button("关闭终端").on_press(Message::Close));
     } else {
-        bar = bar.push(button("打开终端").on_press(Message::Open));
+        bar = bar
+            .push(button("打开终端").on_press_maybe(app.terminal_allowed.then_some(Message::Open)));
     }
     page = page.push(bar);
     if app.input.is_some() || !app.term_status.is_empty() {
@@ -281,6 +346,12 @@ fn detail(app: &App) -> Element<'_, Message> {
                     .width(Length::Fill)
                     .height(Length::Fill),
             )
+            .on_scroll(|delta| {
+                Message::Scroll(match delta {
+                    iced::mouse::ScrollDelta::Lines { y, .. } => (y * 3.).round() as i32,
+                    iced::mouse::ScrollDelta::Pixels { y, .. } => (y / 12.).round() as i32,
+                })
+            })
             .on_press(Message::Focus),
         );
     }

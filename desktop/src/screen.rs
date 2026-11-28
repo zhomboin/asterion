@@ -73,7 +73,7 @@ impl canvas::Program<Message> for Screen<'_> {
                     }
                 }
             }
-            if !self.0.hide_cursor() {
+            if !self.0.hide_cursor() && self.0.scrollback() == 0 {
                 let (r, c) = self.0.cursor_position();
                 f.fill_rectangle(
                     Point::new(

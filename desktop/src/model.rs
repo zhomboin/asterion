@@ -10,6 +10,25 @@ pub struct Node {
 }
 
 impl Node {
+    pub fn from_address(address: &str) -> Result<Self> {
+        let (user, destination) = address
+            .strip_prefix("ssh://")
+            .and_then(|s| s.rsplit_once('@'))
+            .ok_or_else(|| anyhow::anyhow!("已保存的 SSH 地址无效"))?;
+        let (host, port) = destination
+            .rsplit_once(':')
+            .ok_or_else(|| anyhow::anyhow!("已保存的 SSH 端口无效"))?;
+        let host = host
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or(host);
+        let node = Self::parse(host, port, user)?;
+        ensure!(
+            format!("ssh://{node}") == address,
+            "已保存的 SSH 地址格式不一致"
+        );
+        Ok(node)
+    }
     pub fn parse(host: &str, port: &str, user: &str) -> Result<Self> {
         let host = host.trim().to_ascii_lowercase();
         let user = user.trim();
