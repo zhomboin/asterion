@@ -12,6 +12,7 @@ struct Fixture {
     password: String,
     auth_calls: Arc<AtomicUsize>,
     root: Arc<AtomicBool>,
+    requests: std::collections::HashMap<ChannelId, Vec<u8>>,
 }
 
 impl server::Handler for Fixture {
@@ -42,6 +43,10 @@ impl server::Handler for Fixture {
         s: &mut server::Session,
     ) -> Result<(), Self::Error> {
         s.channel_success(id)?;
+        if command.starts_with(b"if command -v python3") {
+            self.requests.insert(id, Vec::new());
+            return Ok(());
+        }
         let output = if command == b"id -u" {
             if self.root.load(Ordering::SeqCst) {
                 "0".into()
@@ -90,6 +95,27 @@ impl server::Handler for Fixture {
         data: &[u8],
         s: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        if let Some(request) = self.requests.get_mut(&id) {
+            request.extend_from_slice(data);
+            if request.last() == Some(&10) {
+                let value: serde_json::Value =
+                    serde_json::from_slice(request).expect("完整 SSH 请求");
+                assert!(value["modules"].is_array());
+                assert_eq!(value["kind"], "operation_catalog");
+                assert_eq!(value["policy"]["file_editor"], true);
+                s.data(
+                    id,
+                    br#"{"progress":{"output":"step","truncated":false}}"#.to_vec(),
+                )?;
+                s.data(id, b"\n{\"outcome\":\"success\",\"value\":".to_vec())?;
+                s.data(id, b"{\"enabled\":true}}\n".to_vec())?;
+                s.exit_status_request(id, 0)?;
+                s.eof(id)?;
+                s.close(id)?;
+                self.requests.remove(&id);
+            }
+            return Ok(());
+        }
         s.data(id, data.to_vec())
     }
     async fn window_change_request(
@@ -119,6 +145,7 @@ async fn exercise() -> Result<()> {
         password: password.clone(),
         auth_calls: Default::default(),
         root: Default::default(),
+        requests: Default::default(),
     };
     let server = fixture.clone();
     let config = Arc::new(server::Config {
@@ -163,6 +190,28 @@ async fn exercise() -> Result<()> {
     let Login::Connected(session) = login(node, Some(pin), auth()).await? else {
         bail!("未建立连接")
     };
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.local");
+    std::fs::create_dir_all(&dir)?;
+    let private = tempfile::tempdir_in(dir)?;
+    let remote =
+        crate::workspace::remote::Remote::new(session.clone(), private.path(), "test").await?;
+    let (progress, receiver) = tokio::sync::watch::channel(None);
+    let reply = remote
+        .query(
+            "operation_catalog",
+            serde_json::json!({}),
+            4,
+            Some(&progress),
+        )
+        .await;
+    assert!(matches!(reply,asterion_protocol::TaskReply::Success{value} if value["enabled"]==true));
+    assert_eq!(receiver.borrow().as_ref().unwrap().output, "step");
+    std::fs::write(private.path().join("policies.json"), b"{} invalid")?;
+    assert!(
+        crate::workspace::remote::Remote::new(session.clone(), private.path(), "test")
+            .await
+            .is_err()
+    );
     let s = sample(session.clone()).await?;
     assert_eq!(
         (s.cpu, s.memory, s.disk),

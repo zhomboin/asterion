@@ -1,4 +1,3 @@
-use std::net::Ipv6Addr;
 use tokio::process::Command;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -11,40 +10,7 @@ pub(super) struct Direct {
 
 impl Direct {
     pub(super) fn parse(value: &str) -> Option<Self> {
-        let destination = value.strip_prefix("ssh://")?;
-        let (user, address) = match destination.split_once('@') {
-            Some((user, address)) if super::config::valid_profile(user) => {
-                (Some(user.to_owned()), address)
-            }
-            Some(_) => return None,
-            None => (None, destination),
-        };
-        let (host, port) = if let Some(ip) = address.strip_prefix('[') {
-            let (ip, rest) = ip.split_once(']')?;
-            ip.parse::<Ipv6Addr>().ok()?;
-            (ip, rest)
-        } else {
-            let end = address.find(':').unwrap_or(address.len());
-            let (host, rest) = address.split_at(end);
-            if host.len() > 253
-                || !host.as_bytes().first()?.is_ascii_alphanumeric()
-                || !host
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
-            {
-                return None;
-            }
-            (host, rest)
-        };
-        let port = if port.is_empty() {
-            None
-        } else {
-            let digits = port.strip_prefix(':')?;
-            if !digits.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            Some(digits.parse::<u16>().ok().filter(|p| *p > 0)?)
-        };
+        let (user, host, port) = crate::connection_name::direct(value)?;
         Some(Self {
             auth: super::auth::Auth::Default,
             host: host.to_owned(),

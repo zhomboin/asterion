@@ -6,12 +6,36 @@ use std::{fs, path::PathBuf};
 pub struct Store(Connection);
 
 impl Store {
-    pub fn open() -> Result<Self> {
+    pub fn workspace_configured() -> Result<bool> {
+        let path = Self::directory()?.join("workspace.sqlite3");
+        if !path.try_exists()? {
+            return Ok(false);
+        }
+        let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let table: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='panel_admin' AND type='table')",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(table
+            && db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM panel_admin WHERE id=1)",
+                [],
+                |r| r.get::<_, bool>(0),
+            )?)
+    }
+    pub fn directory() -> Result<PathBuf> {
         let dir = std::env::var_os("ASTERION_DESKTOP_DATA_DIR")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("Asterion")))
             .context("找不到用户数据目录")?;
         fs::create_dir_all(&dir).context("无法创建桌面数据目录")?;
+        Ok(dir)
+    }
+    pub fn open() -> Result<Self> {
+        Self::open_in(&Self::directory()?)
+    }
+    pub fn open_in(dir: &std::path::Path) -> Result<Self> {
         Self::init(Connection::open(dir.join("desktop.sqlite3")).context("无法打开桌面数据库")?)
     }
 
@@ -36,6 +60,30 @@ impl Store {
             })
         })?
         .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn forget(&mut self, address: &str) -> Result<()> {
+        let Some(node) = self
+            .nodes()?
+            .into_iter()
+            .find(|n| format!("ssh://{n}") == address)
+        else {
+            return Ok(());
+        };
+        let tx = self.0.transaction()?;
+        let id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM nodes WHERE host=? AND port=? AND user=?",
+                params![node.host, node.port, node.user],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = id {
+            tx.execute("DELETE FROM samples WHERE node=?", [id])?;
+            tx.execute("DELETE FROM nodes WHERE id=?", [id])?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn fingerprint(&self, n: &Node) -> Result<Option<String>> {

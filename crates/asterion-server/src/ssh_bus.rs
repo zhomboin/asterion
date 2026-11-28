@@ -19,13 +19,13 @@ pub enum BusError {
     Rejected { code: String, message: String },
 }
 
-pub(crate) struct Dispatch {
+pub struct Dispatch {
     pub request: TaskRequest,
     pub response: oneshot::Sender<TaskReply>,
     pub progress: watch::Sender<Option<TaskProgress>>,
 }
 
-pub(crate) enum Control {
+pub enum Control {
     Task(Dispatch),
     Cancel(String),
 }
@@ -78,7 +78,7 @@ impl SshBus {
         self.sites.lock().unwrap_or_else(|err| err.into_inner())
     }
 
-    pub(crate) fn attach(self: &Arc<Self>, node_id: &str, can_monitor: bool) -> Subscription {
+    pub fn attach(self: &Arc<Self>, node_id: &str, can_monitor: bool) -> Subscription {
         let identity = Arc::new(());
         let (tx, rx) = mpsc::channel(MAX_PENDING);
         self.sites().insert(
@@ -186,7 +186,7 @@ impl PendingTask {
     }
 }
 
-pub(crate) struct Subscription {
+pub struct Subscription {
     bus: Arc<SshBus>,
     node_id: String,
     identity: Arc<()>,
@@ -194,7 +194,7 @@ pub(crate) struct Subscription {
 }
 
 impl Subscription {
-    pub(crate) async fn next(&mut self) -> Control {
+    pub async fn next(&mut self) -> Control {
         match self.rx.recv().await {
             Some(dispatch) => dispatch,
             None => std::future::pending().await,

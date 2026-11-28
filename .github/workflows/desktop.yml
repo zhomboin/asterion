@@ -7,7 +7,27 @@ permissions:
   contents: read
 
 jobs:
+  collectors:
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-22.04, arch: x86_64 }
+          - { runner: ubuntu-22.04-arm, arch: aarch64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable build --locked --release -p asterion-collector
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-collector-${{ matrix.arch }}
+          path: target/release/asterion-collector
+          if-no-files-found: error
+
   windows:
+    needs: collectors
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -63,8 +83,18 @@ jobs:
             if (-not $app.HasExited) { $app.Kill() }
             $app.Dispose()
           }
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-collector-x86_64
+          path: desktop/dist/collectors/x86_64
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-collector-aarch64
+          path: desktop/dist/collectors/aarch64
+      - name: 组装 Windows 便携包
+        run: Copy-Item -LiteralPath target/x86_64-pc-windows-msvc/release/asterion-desktop.exe -Destination dist
       - uses: actions/upload-artifact@v4
         with:
           name: asterion-desktop-windows-x64
-          path: desktop/target/x86_64-pc-windows-msvc/release/asterion-desktop.exe
+          path: desktop/dist/
           if-no-files-found: error

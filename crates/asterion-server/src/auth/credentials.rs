@@ -31,6 +31,18 @@ pub async fn bootstrap_admin(
     insert_admin(pool, username, hash).await
 }
 
+pub async fn bootstrap_desktop_admin(pool: &SqlitePool, password: String) -> Result<()> {
+    if configured_admin(pool).await?.is_none() {
+        ensure!(
+            valid_password(&password),
+            "首次使用请设置 12 至 128 字节的工作区口令"
+        );
+        let hash = tokio::task::spawn_blocking(move || hash_password(&password)).await??;
+        insert_admin(pool, "local", hash).await?;
+    }
+    Ok(())
+}
+
 pub async fn bootstrap_local_admin(pool: &SqlitePool) -> Result<()> {
     if configured_admin(pool).await?.is_some() {
         return Ok(());

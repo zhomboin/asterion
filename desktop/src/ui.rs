@@ -22,12 +22,18 @@ fn label(s: &str) -> iced::widget::Text<'_> {
 }
 
 pub(super) fn view(app: &App) -> Element<'_, Message> {
+    if app.desk.visible {
+        return crate::desk::view(app);
+    }
     let connected = app.session.is_some();
     let offline = app.session.as_ref().is_some_and(|s| s.is_closed());
     let header = row![
         text("Asterion").size(25).color(INK),
         text("节点工作台").size(16).color(MUTED),
         space::horizontal(),
+        button("管理工作区").on_press_maybe(
+            (!app.busy && app.verify.is_none()).then_some(Message::Desk(crate::desk::Action::Show))
+        ),
         text(if offline {
             "SSH 已断开"
         } else if connected {
@@ -223,7 +229,11 @@ fn detail(app: &App) -> Element<'_, Message> {
             space::horizontal(),
             text(trend).size(13).color(MUTED)
         ])
-        .push(canvas(Chart(&app.history)).width(Length::Fill).height(80))
+        .push(
+            canvas(Chart(&app.history, 15, 100.))
+                .width(Length::Fill)
+                .height(80),
+        )
         .push(iced::widget::rule::horizontal(1));
     let mut bar = row![
         text("SSH 终端").size(18),

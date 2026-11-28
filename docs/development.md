@@ -1,6 +1,6 @@
 # 本地开发
 
-Windows 原生客户端的工具链、构建及验证步骤见[桌面开发](windows-desktop.md#在-windows-本地开发)。以下步骤适用于 Linux 面板。
+Windows 原生客户端与内嵌管理工作区的工具链、构建及验证步骤见[桌面开发](windows-desktop.md#在-windows-本地开发)。以下步骤适用于 Linux 面板。
 
 在 Linux 或 WSL Ubuntu 的项目根目录执行以下命令。准备 Rust stable、Node.js 24、npm、Linux C 编译工具链和 OpenSSH 客户端。预构建包的使用步骤见[本机使用](local.md)。
 

@@ -8,14 +8,22 @@ publish = false
 
 [dependencies]
 asterion-protocol = { path = "../crates/asterion-protocol" }
+asterion-server = { path = "../crates/asterion-server", default-features = false }
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+sqlx = {version = "0.8.6", default-features = false, features = ["runtime-tokio","sqlite"]}
+chrono = "0.4"
+sha2 = "0.10"
+percent-encoding = "2"
 anyhow = "1"
 iced = { version = "0.14", default-features = false, features = ["tiny-skia", "tokio", "canvas", "advanced", "x11", "wayland"] }
 russh = { version = "0.65.4", default-features = false, features = ["ring", "rsa"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
 vt100 = "0.16"
 zeroize = "1"
 
 [dev-dependencies]
+tempfile = "3"
 rand = "0.10"

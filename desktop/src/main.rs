@@ -1,13 +1,16 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod chart;
+mod desk;
 mod keys;
+mod management;
 mod model;
 mod screen;
 mod ssh;
 mod store;
 mod terminal;
 mod ui;
+mod workspace;
 
 use iced::{Font, Size, Subscription, Task, Theme, widget::operation};
 use model::{Node, Sample};
@@ -39,6 +42,7 @@ enum Method {
 }
 #[derive(Clone)]
 enum Message {
+    Desk(desk::Action),
     Idle,
     Focus,
     Host(String),
@@ -73,6 +77,7 @@ impl std::fmt::Debug for Message {
 }
 
 struct App {
+    desk: desk::Desk,
     store: Option<Store>,
     nodes: Vec<Node>,
     host: String,
@@ -117,6 +122,7 @@ impl App {
             .unwrap_or_default();
         let first = nodes.first();
         Self {
+            desk: Default::default(),
             host: first.map(|n| n.host.clone()).unwrap_or_default(),
             port: first
                 .map(|n| n.port.to_string())
@@ -225,6 +231,7 @@ impl App {
 
     fn handle(&mut self, msg: Message) -> anyhow::Result<Task<Message>> {
         match msg {
+            Message::Desk(action) => return self.desktop(action),
             Message::Host(v) => self.host = v,
             Message::Port(v) => self.port = v,
             Message::User(v) => self.user = v,
@@ -253,6 +260,9 @@ impl App {
             }
             Message::Cancel => {
                 self.close_term();
+                if let Ok(node) = self.node() {
+                    self.desk.active.remove(&workspace::Workspace::id(&node));
+                }
                 let session = self.session.take();
                 self.epoch += 1;
                 self.verify = None;
@@ -289,7 +299,7 @@ impl App {
                         self.node_id = Some(id);
                         self.notice.clear();
                         self.term_status.clear();
-                        return Ok(self.poll());
+                        return Ok(Task::batch([self.poll(), self.attach_workspace()?]));
                     }
                     Err(e) => {
                         self.secret.zeroize();
@@ -297,7 +307,10 @@ impl App {
                     }
                 }
             }
-            Message::Tick => return Ok(self.poll()),
+            Message::Tick => {
+                let refresh = self.refresh_management();
+                return Ok(Task::batch([self.poll(), refresh]));
+            }
             Message::Sample(epoch, r) if epoch == self.epoch => {
                 self.sampling = false;
                 match r {
@@ -322,9 +335,8 @@ impl App {
                     self.screen_cache.clear();
                     self.ready = false;
                     self.term_status = "正在打开终端…".into();
-                    return Ok(
-                        terminal::run(session, c, r, rx).map(move |e| Message::Term(epoch, e))
-                    );
+                    return Ok(terminal::run(session, c, r, rx, self.desk.container.take())
+                        .map(move |e| Message::Term(epoch, e)));
                 }
             }
             Message::Close => self.close_term(),
@@ -392,7 +404,7 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if self.session.is_none() {
+        if self.session.is_none() && !self.desk.visible {
             return Subscription::none();
         }
         iced::time::every(Duration::from_secs(5)).map(|_| Message::Tick)

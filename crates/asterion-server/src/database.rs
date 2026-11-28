@@ -77,6 +77,20 @@ async fn open(url: &str) -> Result<SqlitePool> {
         .context("无法打开 SQLite 数据库")
 }
 
+pub async fn connect_path(path: &std::path::Path) -> Result<SqlitePool> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await?;
+    migrate(&pool).await?;
+    Ok(pool)
+}
+
 async fn migrate(pool: &SqlitePool) -> Result<()> {
     MIGRATOR.run(pool).await.context("SQLite 迁移失败")?;
     Ok(())
