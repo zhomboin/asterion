@@ -48,6 +48,64 @@ fn path(value: &str, node: &Node) -> Result<PathBuf> {
         .or_else(|| expanded.strip_prefix("~\\"))
         .map_or_else(|| PathBuf::from(&expanded), |v| home.join(v)))
 }
+// OpenSSH 的 -G 展开会去掉引号，Windows 文件路径本身可以含空格。
+fn known_host_files(line: &str, node: &Node) -> Result<Vec<PathBuf>> {
+    let home = std::env::home_dir().context("找不到用户主目录")?;
+    let mut groups = Vec::new();
+    let mut group = String::new();
+    for part in line.split_inclusive(char::is_whitespace) {
+        let word = part.trim_end();
+        let starts_path = Path::new(word).has_root()
+            || word.starts_with('~')
+            || word.starts_with("__PROGRAMDATA__");
+        if starts_path && !group.trim().is_empty() {
+            groups.push(std::mem::take(&mut group));
+        }
+        group.push_str(part);
+    }
+    groups.push(group);
+    let mut files = Vec::new();
+    for group in groups {
+        let raw = group.trim();
+        if raw.is_empty() || raw == "none" {
+            continue;
+        }
+        let resolve = |s: &str| {
+            path(
+                &s.replace(
+                    "__PROGRAMDATA__",
+                    &std::env::var("ProgramData").unwrap_or_default(),
+                ),
+                node,
+            )
+        };
+        let literal = resolve(raw)?;
+        let unresolved = literal.strip_prefix(&home).unwrap_or(&literal);
+        if raw.contains(char::is_whitespace)
+            && unresolved.to_string_lossy().contains(char::is_whitespace)
+        {
+            let parts = raw
+                .split_whitespace()
+                .map(resolve)
+                .collect::<Result<Vec<_>>>()?;
+            if literal.is_file() {
+                ensure!(
+                    !parts.iter().any(|p| p.is_file()),
+                    "已知主机文件路径有歧义，请使用命名连接"
+                );
+            } else {
+                ensure!(
+                    parts.iter().all(|p| p.is_file()),
+                    "无法区分已知主机文件路径，请使用完整路径或命名连接"
+                );
+                files.extend(parts);
+                continue;
+            }
+        }
+        files.push(literal);
+    }
+    Ok(files)
+}
 fn parse(output: &str) -> Result<Config> {
     let node = Node::parse(
         option(output, "hostname").context("SSH 配置缺少主机")?,
@@ -65,23 +123,9 @@ fn parse(output: &str) -> Result<Config> {
         .map(|(_, v)| path(v, &node))
         .collect::<Result<_>>()?;
     let mut files = Vec::new();
-    let home = std::env::home_dir().context("找不到用户主目录")?;
     for key in ["userknownhostsfile", "globalknownhostsfile"] {
         if let Some(paths) = option(output, key) {
-            let paths = paths
-                .replace(home.to_string_lossy().as_ref(), "~")
-                .replace(&home.to_string_lossy().replace(char::from(92), "/"), "~");
-            for file in crate::local_program::arguments(&paths)? {
-                if file != "none" {
-                    files.push(path(
-                        &file.replace(
-                            "__PROGRAMDATA__",
-                            &std::env::var("ProgramData").unwrap_or_default(),
-                        ),
-                        &node,
-                    )?);
-                }
-            }
+            files.extend(known_host_files(paths, &node)?);
         }
     }
     Ok(Config {
@@ -286,5 +330,21 @@ mod tests {
         assert!(
             super::parse("hostname example.invalid\nuser operator\nproxyusefdpass yes").is_err()
         );
+    }
+    #[test]
+    fn resolves_unquoted_openssh_output_with_spaces() -> anyhow::Result<()> {
+        use std::path::Path;
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.local");
+        std::fs::create_dir_all(&base)?;
+        let dir = tempfile::tempdir_in(base)?;
+        let first = dir.path().join("host trust  records");
+        let second = dir.path().join("shared");
+        std::fs::write(&first, [])?;
+        let n = super::Node::parse("sample.invalid", "22", "operator")?;
+        let line = format!("{} {}", first.display(), second.display());
+        assert_eq!(super::known_host_files(&line, &n)?, [first, second]);
+        std::fs::write(dir.path().join("host"), [])?;
+        assert!(super::known_host_files(&line, &n).is_err());
+        Ok(())
     }
 }

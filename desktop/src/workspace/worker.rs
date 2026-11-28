@@ -45,7 +45,14 @@ pub fn start(
                 tokio::time::sleep(Duration::from_secs(delay)).await;
                 match remote.reconnect().await {
                     Ok(()) => break,
-                    Err(e) if e.downcast_ref::<crate::ssh::RetryStopped>().is_some() => return,
+                    Err(e) if e.downcast_ref::<crate::ssh::RetryStopped>().is_some() => {
+                        let _ = sqlx::query("UPDATE nodes SET ssh_error=? WHERE id=?")
+                            .bind(e.to_string())
+                            .bind(&id)
+                            .execute(&pool)
+                            .await;
+                        return;
+                    }
                     Err(_) => delay = (delay * 2).min(60),
                 }
             }

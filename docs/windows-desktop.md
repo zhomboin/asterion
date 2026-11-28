@@ -40,7 +40,7 @@ Asterion 在 Windows 本机运行原生窗口，通过 SSH 管理 Linux 节点�
 7. 自定义授权时，在当前用户数据目录创建 UTF-8 的 `policies.json`。顶层键使用「节点资料」显示的完整 SSH 地址，值只包含该节点的 `policy` 对象。可按[策略示例](../deploy/ssh.example.json)逐项添加实际需要的目标。默认可读取监控、打开文件和运行预定义的 uptime。自定义策略中需显式设置 `file_editor` 为 true 才开启文件编辑。策略在后续请求生效。也可使用数据目录的 `profiles.json` 或用 `ASTERION_SSH_CONFIG_FILE` 指定其路径；命名连接使用自身的策略。直连地址同时出现在两份文件时，优先使用 `policies.json` 对应条目。受管容器终端还需要容器策略开启 terminal 并通过远端身份及隔离校验。
 8. 当前用户数据目录中的 `desktop.sqlite3` 保存快捷连接、主机指纹和最近采样，`workspace.sqlite3` 保存管理记录与口令哈希。按上面的备份步骤一起复制数据库和策略。可选保存的密码密文位于 `desktop.sqlite3`，恢复到其他 Windows 账号或电脑后需重新输入。
 
-命名连接文件格式与[Linux 连接样例](../deploy/ssh.example.json)一致。私钥及已知主机文件的相对路径以该配置文件所在目录为准。使用自定义 OpenSSH 配置文件时，启动前在 PowerShell 将 `$env:ASTERION_LOCAL_SSH_CONFIG` 设置为文件完整路径。
+命名连接文件格式与[Linux 连接样例](../deploy/ssh.example.json)一致。私钥及已知主机文件的相对路径以该配置文件所在目录为准。使用自定义 OpenSSH 配置文件时，启动前在 PowerShell 将 `$env:ASTERION_LOCAL_SSH_CONFIG` 设置为文件完整路径。已知主机文件可位于含空格的路径；若 OpenSSH 展开后存在多种实际文件解释，请使用命名连接的 `known_hosts_file` 明确指定。
 
 工作区读取 `ASTERION_SAMPLE_INTERVAL_SECS`、`ASTERION_METRIC_RETENTION_DAYS`、`ASTERION_TREND_RETENTION_DAYS` 与 `ASTERION_TERMINAL_ENABLED`。在启动程序的 PowerShell 中设置相应环境变量，重新启动后从「设置」检查生效值。例如 `$env:ASTERION_TERMINAL_ENABLED = '0'` 会关闭主机和容器交互终端。
 
