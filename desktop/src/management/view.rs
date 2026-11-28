@@ -70,7 +70,10 @@ pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
             .push(btn("锁定", Event::Lock));
     }
     let body: Element<'_, Event> = if let Some(c) = &m.confirm {
-        let mut box_ = column![section(c.title.clone()), facts::all(&c.action)].spacing(12);
+        let mut box_ = column![section(c.title.clone())].spacing(12);
+        if !c.action.is_null() {
+            box_ = box_.push(facts::all(&c.action));
+        }
         if let Some(end) = c.prepared.get("expires_at") {
             box_ = box_.push(text(format!(
                 "确认有效至 {}",
@@ -165,7 +168,9 @@ pub fn page(m: &Manager, active: bool) -> Element<'_, Event> {
         let mut head = row![
             section(m.page.kind.title()),
             space::horizontal(),
-            btn("返回", Event::Back),
+            button(text("返回").size(14))
+                .style(button::secondary)
+                .on_press_maybe((!m.back.is_empty()).then_some(Event::Back)),
             btn("刷新", Event::Refresh)
         ]
         .spacing(6)
@@ -628,6 +633,15 @@ fn details(m: &Manager, active: bool) -> Element<'_, Event> {
                     "audit",
                 ],
             ));
+            if m.has_draft() && !v["finished_at"].is_null() {
+                c = c.push(
+                    row![
+                        btn("返回文件草稿", Event::RestoreDraft),
+                        btn("复制草稿", Event::CopyDraft)
+                    ]
+                    .spacing(8),
+                );
+            }
             if v["can_cancel"] == true {
                 c = c.push(mutation(
                     "取消任务",

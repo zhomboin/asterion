@@ -22,6 +22,21 @@ fn label(s: &str) -> iced::widget::Text<'_> {
 }
 
 pub(super) fn view(app: &App) -> Element<'_, Message> {
+    if app.closing.is_some() {
+        return container(
+            column![
+                text("关闭窗口并放弃未保存的修改？").size(20),
+                row![
+                    button("继续编辑").on_press(Message::KeepWindow),
+                    button("放弃并关闭").on_press(Message::DiscardWindow)
+                ]
+                .spacing(10)
+            ]
+            .spacing(18),
+        )
+        .center(Length::Fill)
+        .into();
+    }
     if app.desk.visible {
         return crate::desk::view(app);
     }

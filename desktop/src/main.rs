@@ -28,6 +28,7 @@ fn main() -> iced::Result {
         .default_font(Font::with_name("Microsoft YaHei UI"))
         .window(iced::window::Settings {
             size: Size::new(1060., 790.),
+            exit_on_close_request: false,
             min_size: Some(Size::new(780., 620.)),
             ..Default::default()
         })
@@ -43,6 +44,9 @@ enum Method {
 #[derive(Clone)]
 enum Message {
     Desk(desk::Action),
+    CloseWindow(iced::window::Id),
+    KeepWindow,
+    DiscardWindow,
     Idle,
     Focus,
     Host(String),
@@ -78,6 +82,7 @@ impl std::fmt::Debug for Message {
 
 struct App {
     desk: desk::Desk,
+    closing: Option<iced::window::Id>,
     store: Option<Store>,
     nodes: Vec<Node>,
     host: String,
@@ -123,6 +128,7 @@ impl App {
         let first = nodes.first();
         Self {
             desk: Default::default(),
+            closing: None,
             host: first.map(|n| n.host.clone()).unwrap_or_default(),
             port: first
                 .map(|n| n.port.to_string())
@@ -232,6 +238,14 @@ impl App {
     fn handle(&mut self, msg: Message) -> anyhow::Result<Task<Message>> {
         match msg {
             Message::Desk(action) => return self.desktop(action),
+            Message::CloseWindow(id) if self.desk.dirty() => self.closing = Some(id),
+            Message::CloseWindow(id) => return Ok(iced::window::close(id)),
+            Message::KeepWindow => self.closing = None,
+            Message::DiscardWindow => {
+                if let Some(id) = self.closing.take() {
+                    return Ok(iced::window::close(id));
+                }
+            }
             Message::Host(v) => self.host = v,
             Message::Port(v) => self.port = v,
             Message::User(v) => self.user = v,
@@ -404,9 +418,13 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        let closing = iced::window::close_requests().map(Message::CloseWindow);
         if self.session.is_none() && !self.desk.visible {
-            return Subscription::none();
+            return closing;
         }
-        iced::time::every(Duration::from_secs(5)).map(|_| Message::Tick)
+        Subscription::batch([
+            closing,
+            iced::time::every(Duration::from_secs(5)).map(|_| Message::Tick),
+        ])
     }
 }

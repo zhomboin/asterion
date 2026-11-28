@@ -36,6 +36,8 @@ pub enum Event {
     Sudo(String),
     Confirm,
     Completed(u64, Result<Value, String>),
+    RestoreDraft,
+    CopyDraft,
     ContainerTerminal(Value),
     Connect,
     Reconnect,
@@ -45,7 +47,7 @@ pub enum Event {
 }
 enum Pending {
     Read,
-    Write(Page),
+    Write(Page, bool),
     Prepare(Option<String>),
     Confirm(String),
 }
@@ -74,6 +76,7 @@ pub struct Manager {
     pub form: Option<Form>,
     pub confirm: Option<Confirm>,
     pub discard: bool,
+    draft: Option<(String, Page, Form)>,
     back: Vec<(Page, String, usize)>,
     serial: u64,
     pending: Pending,
@@ -95,6 +98,7 @@ impl Default for Manager {
             form: None,
             confirm: None,
             discard: false,
+            draft: None,
             back: vec![],
             serial: 0,
             pending: Pending::Read,
@@ -106,7 +110,18 @@ impl Manager {
     pub fn view(&self, active: bool) -> Element<'_, Event> {
         view::page(self, active)
     }
+    pub fn has_draft(&self) -> bool {
+        self.draft
+            .as_ref()
+            .is_some_and(|(id, _, _)| self.page.kind == Kind::Job && self.page.key == *id)
+    }
+    pub fn dirty(&self) -> bool {
+        self.form.as_ref().is_some_and(|f| f.dirty)
+    }
     pub fn set_node(&mut self, id: String, name: String) {
+        if self.node != id {
+            self.draft = None;
+        }
         self.node = id;
         self.name = name;
         self.catalog = Value::Null;
@@ -163,7 +178,8 @@ impl Manager {
         self.load(core)
     }
     fn write(&mut self, work: Write, core: Arc<Workspace>) -> Task<Event> {
-        self.run(Pending::Write(work.after), async move {
+        let removed = work.method == Method::DELETE && work.path == format!("/nodes/{}", self.node);
+        self.run(Pending::Write(work.after, removed), async move {
             core.api(work.method, &work.path, work.body).await
         })
     }
@@ -219,6 +235,10 @@ impl Manager {
                             );
                         }
                         self.value = data;
+                        if self.has_draft() && self.value["state"] == "succeeded" {
+                            self.draft = None;
+                        }
+
                         if matches!(self.page.kind, Kind::Trends | Kind::Metrics) {
                             self.network = self.value["samples"]
                                 .as_array()
@@ -268,7 +288,12 @@ impl Manager {
                                 .collect();
                         }
                     }
-                    Pending::Write(page) => return Ok(self.go(page, false, core)),
+                    Pending::Write(page, removed) => {
+                        if removed {
+                            self.set_node(String::new(), String::new());
+                        }
+                        return Ok(self.go(page, false, core));
+                    }
                     Pending::Prepare(content) => {
                         self.confirm = Some(Confirm {
                             title: format!("确认对 {} 执行操作", self.name),
@@ -284,11 +309,33 @@ impl Manager {
                         });
                     }
                     Pending::Confirm(id) => {
+                        if self
+                            .form
+                            .as_ref()
+                            .is_some_and(|f| f.spec.kind == forms::FormKind::File)
+                            && let Some(form) = self.form.take()
+                        {
+                            self.draft = Some((id.clone(), self.page.clone(), form));
+                        }
                         return Ok(self.go(Page::detail(Kind::Job, id, Value::Null), true, core));
                     }
                 }
             }
             Event::Completed(..) => {}
+            Event::CopyDraft if self.has_draft() => {
+                return Ok(iced::clipboard::write(
+                    self.draft.as_ref().unwrap().2.editor.text(),
+                ));
+            }
+            Event::RestoreDraft if self.has_draft() => {
+                let (_, page, form) = self.draft.take().unwrap();
+                self.page = page;
+                self.form = Some(form);
+                self.error.clear();
+                self.value = Value::Null;
+                return Ok(self.load(core));
+            }
+
             Event::Password(p) => {
                 if let Some(c) = &mut self.confirm {
                     c.password = Zeroizing::new(p);

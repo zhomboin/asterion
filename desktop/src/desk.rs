@@ -72,6 +72,11 @@ impl Default for Desk {
         }
     }
 }
+impl Desk {
+    pub fn dirty(&self) -> bool {
+        self.visible && self.manager.dirty()
+    }
+}
 fn msg(e: Event) -> Message {
     Message::Desk(Action::Manage(e))
 }
